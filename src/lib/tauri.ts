@@ -7,6 +7,7 @@ import type {
   ContentTree,
   CreateProjectArgs,
   CslolModInfo,
+  DiagnosticReport,
   FantomePeekResult,
   HotkeyAction,
   ImportFantomeArgs,
@@ -169,6 +170,11 @@ export const api = {
   // Storage
   detectStorageMedium: (path: string) =>
     invokeResult<StorageMedium>("detect_storage_medium", { path }),
+
+  // Diagnostics
+  runDiagnostics: () => invokeResult<DiagnosticReport>("run_diagnostics"),
+  openElevatedTerminal: (withBanner: boolean) =>
+    invokeResult<void>("open_elevated_terminal", { withBanner }),
 
   // Workshop
   getWorkshopProjects: () => invokeResult<WorkshopProject[]>("get_workshop_projects"),

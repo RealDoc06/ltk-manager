@@ -5,6 +5,7 @@
 
 mod commands;
 mod deep_link;
+mod diagnostics;
 mod error;
 mod hotkeys;
 mod legacy_patcher;
@@ -105,6 +106,9 @@ fn main() {
             commands::minimize_to_tray,
             // Storage
             commands::detect_storage_medium,
+            // Diagnostics
+            commands::run_diagnostics,
+            commands::open_elevated_terminal,
             // Workshop
             commands::get_workshop_projects,
             commands::create_workshop_project,
