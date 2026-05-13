@@ -10,7 +10,9 @@ dist/
 
 # Editor
 .vscode/
+.idea/
 *.sw?
+*.iml
 
 # Logs
 *.log
