@@ -18,6 +18,11 @@ declare module "@tanstack/react-router" {
     router: typeof router;
   }
 }
+// Function to show the application window
+async function showAppWindow() {
+  const appWindow = (await import("@tauri-apps/api/window")).getCurrentWindow();
+  appWindow.show();
+}
 
 // Theme provider component that applies theme to document
 function ThemeProvider({ children }: { children: ReactNode }) {
@@ -37,3 +42,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+// Executes function to show window
+showAppWindow();
