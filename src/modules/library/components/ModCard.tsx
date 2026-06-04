@@ -53,6 +53,7 @@ export function ModCard({ mod, viewMode, onViewDetails, onEditMetadata }: ModCar
   const selectMode = useLibrarySelectionStore((s) => s.selectMode);
   const isSelected = useLibrarySelectionStore((s) => s.selectedIds.has(mod.id));
   const toggleSelection = useLibrarySelectionStore((s) => s.toggle);
+  const selectRangeTo = useLibrarySelectionStore((s) => s.selectRangeTo);
 
   const {
     isFlagged,
@@ -112,7 +113,8 @@ export function ModCard({ mod, viewMode, onViewDetails, onEditMetadata }: ModCar
       return;
     }
     if (selectMode) {
-      toggleSelection(mod.id);
+      if (e.shiftKey) selectRangeTo(mod.id);
+      else toggleSelection(mod.id);
       return;
     }
     if (disabled) return;
@@ -154,11 +156,11 @@ export function ModCard({ mod, viewMode, onViewDetails, onEditMetadata }: ModCar
         )}
       >
         {selectMode && (
-          <div data-no-toggle onClick={(e) => e.stopPropagation()} className="shrink-0">
+          <div className="pointer-events-none shrink-0">
             <Checkbox
               size="md"
               checked={isSelected}
-              onCheckedChange={() => toggleSelection(mod.id)}
+              tabIndex={-1}
               aria-label={`Select ${mod.displayName}`}
             />
           </div>
@@ -318,15 +320,11 @@ export function ModCard({ mod, viewMode, onViewDetails, onEditMetadata }: ModCar
       )}
     >
       {selectMode && (
-        <div
-          className="absolute top-2 left-2 z-10"
-          data-no-toggle
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="pointer-events-none absolute top-2 left-2 z-10">
           <Checkbox
             size="md"
             checked={isSelected}
-            onCheckedChange={() => toggleSelection(mod.id)}
+            tabIndex={-1}
             aria-label={`Select ${mod.displayName}`}
             className="shadow-lg backdrop-blur-sm"
           />

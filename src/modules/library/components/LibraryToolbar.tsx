@@ -9,7 +9,6 @@ import { useLibrarySelectionStore } from "@/stores";
 
 import { ActiveFilterChips } from "./ActiveFilterChips";
 import { FilterPopover } from "./FilterPopover";
-import { SelectionActionBar } from "./SelectionActionBar";
 import { SortDropdown } from "./SortDropdown";
 
 interface PatcherProps {
@@ -130,7 +129,7 @@ export function LibraryToolbar({
             disabled={isPatcherActive || isLoading}
             left={<CheckSquare className="h-4 w-4" />}
           >
-            {selectMode ? "Done" : "Select"}
+            Select
           </Button>
         </Tooltip>
 
@@ -210,7 +209,6 @@ export function LibraryToolbar({
         )}
       </div>
       <ActiveFilterChips />
-      {selectMode && <SelectionActionBar visibleMods={visibleMods} />}
     </div>
   );
 }
