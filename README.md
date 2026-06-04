@@ -62,8 +62,6 @@ The next-generation mod manager for League of Legends, built by the [League Tool
 
 LTK Manager is open-source under a dual **MIT / Apache-2.0** license — you may choose either.
 
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLeagueToolkit%2Fltk-manager.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FLeagueToolkit%2Fltk-manager?ref=badge_large)
-
 ### `cslol-dll.dll` Policy
 
 This application bundles `cslol-dll.dll`, the core injection module originally from cslol-manager. Its use and redistribution are governed by the [CSLOL DLL License Addendum](LICENSE-CSLOL.md).
