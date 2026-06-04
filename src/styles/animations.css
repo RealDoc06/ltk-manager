@@ -140,3 +140,7 @@
 .animate-slide-down {
   animation: slide-down var(--duration-005) var(--ease-out);
 }
+
+.animate-slide-up {
+  animation: slide-up var(--duration-005) var(--ease-out);
+}

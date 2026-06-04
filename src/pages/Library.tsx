@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { useToast } from "@/components";
@@ -10,6 +10,7 @@ import {
   ImportProgressDialog,
   LibraryContent,
   LibraryToolbar,
+  SelectionActionBar,
   useFilteredMods,
   useFilterOptions,
   useInstalledMods,
@@ -25,6 +26,7 @@ import {
   useStopPatcher,
 } from "@/modules/patcher";
 import { useSaveSettings, useSettings } from "@/modules/settings";
+import { useLibrarySelectionStore } from "@/stores";
 
 interface LibraryProps {
   folderId?: string;
@@ -56,6 +58,12 @@ export function Library({ folderId }: LibraryProps = {}) {
   const filterOptions = useFilterOptions(mods);
   const hasEnabledMods = mods.some((m) => m.enabled);
   const visibleMods = useFilteredMods(mods, searchQuery);
+
+  const selectMode = useLibrarySelectionStore((s) => s.selectMode);
+  const setOrderedIds = useLibrarySelectionStore((s) => s.setOrderedIds);
+  useEffect(() => {
+    setOrderedIds(visibleMods.map((m) => m.id));
+  }, [visibleMods, setOrderedIds]);
 
   useHotkeys("ctrl+i", () => actions.handleInstallMod(), {
     preventDefault: true,
@@ -159,6 +167,7 @@ export function Library({ folderId }: LibraryProps = {}) {
         error={error}
         folderId={folderId}
       />
+      {selectMode && <SelectionActionBar visibleMods={visibleMods} />}
       <ImportProgressDialog
         open={actions.importDialogOpen}
         onClose={actions.handleCloseImportDialog}

@@ -1,7 +1,8 @@
-import { CheckSquare, Trash2, X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 
-import { Button, useToast } from "@/components";
+import { Button, Checkbox, IconButton, Tooltip, useToast } from "@/components";
 import type { InstalledMod } from "@/lib/tauri";
 import { useBulkUninstallMods, useInstalledMods } from "@/modules/library/api";
 import { usePatcherStatus } from "@/modules/patcher";
@@ -15,7 +16,9 @@ interface SelectionActionBarProps {
 
 export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
   const selectedIds = useLibrarySelectionStore((s) => s.selectedIds);
-  const selectAll = useLibrarySelectionStore((s) => s.selectAll);
+  const addMany = useLibrarySelectionStore((s) => s.addMany);
+  const removeMany = useLibrarySelectionStore((s) => s.removeMany);
+  const setSelection = useLibrarySelectionStore((s) => s.setSelection);
   const clear = useLibrarySelectionStore((s) => s.clear);
   const exitSelectMode = useLibrarySelectionStore((s) => s.exitSelectMode);
 
@@ -28,28 +31,28 @@ export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
   const { data: allMods = [] } = useInstalledMods();
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Snapshot of the mods to uninstall, frozen at confirm-dialog open so the optimistic
+  // cache update (which empties the live selection mid-mutation) can't blank the preview.
+  const [pendingMods, setPendingMods] = useState<InstalledMod[]>([]);
 
   const selectedMods = useMemo(
     () => allMods.filter((m) => selectedIds.has(m.id)),
     [allMods, selectedIds],
   );
-  const selectedCount = selectedIds.size;
+  const selectedCount = selectedMods.length;
 
   const visibleIds = useMemo(() => visibleMods.map((m) => m.id), [visibleMods]);
-  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
-
-  function handleSelectAllVisible() {
-    const union = new Set(selectedIds);
-    for (const id of visibleIds) union.add(id);
-    selectAll([...union]);
-  }
-
-  function handleClear() {
-    clear();
-  }
+  const visibleSelectedCount = useMemo(
+    () => visibleMods.reduce((n, m) => n + (selectedIds.has(m.id) ? 1 : 0), 0),
+    [visibleMods, selectedIds],
+  );
+  const allVisibleSelected = visibleIds.length > 0 && visibleSelectedCount === visibleIds.length;
+  const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected;
+  const hiddenCount = selectedCount - visibleSelectedCount;
 
   function handleOpenDialog() {
     if (selectedCount === 0) return;
+    setPendingMods(selectedMods);
     setDialogOpen(true);
   }
 
@@ -58,8 +61,21 @@ export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
     setDialogOpen(false);
   }
 
+  useHotkeys("escape", () => exitSelectMode(), { enabled: !dialogOpen }, [dialogOpen]);
+  useHotkeys(
+    "ctrl+a, meta+a",
+    (e) => {
+      e.preventDefault();
+      addMany(visibleIds);
+    },
+    { enabled: !dialogOpen, preventDefault: true },
+    [dialogOpen, visibleIds],
+  );
+
   async function handleConfirmUninstall() {
-    const ids = [...selectedIds];
+    const ids = pendingMods.map((m) => m.id);
+    if (ids.length === 0) return;
+
     try {
       const result = await bulkUninstall.mutateAsync(ids);
       setDialogOpen(false);
@@ -69,19 +85,20 @@ export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
           "Mods uninstalled",
           `${result.succeeded.length} mod${result.succeeded.length === 1 ? "" : "s"} removed`,
         );
+        exitSelectMode();
       } else if (result.succeeded.length === 0) {
         toast.error(
           "Uninstall failed",
           `All ${result.failed.length} mod${result.failed.length === 1 ? "" : "s"} failed to uninstall`,
         );
+        setSelection(result.failed.map((f) => f.id));
       } else {
         toast.warning(
           "Uninstall completed with errors",
           `${result.succeeded.length} removed, ${result.failed.length} failed`,
         );
+        setSelection(result.failed.map((f) => f.id));
       }
-
-      exitSelectMode();
     } catch (error: unknown) {
       toast.error("Uninstall failed", error instanceof Error ? error.message : String(error));
     }
@@ -89,28 +106,49 @@ export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-3 border-t border-surface-600 bg-surface-800/70 px-4 py-2">
-        <span className="text-sm text-surface-200">
-          <span className="font-semibold text-accent-400">{selectedCount}</span> selected
-        </span>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center px-4 pb-6">
+        <div className="pointer-events-auto flex max-w-full animate-slide-up flex-wrap items-center gap-1 rounded-xl border border-surface-700 bg-surface-800/95 p-1.5 shadow-glass backdrop-blur-md">
+          <Tooltip content="Exit select mode (Esc)">
+            <IconButton
+              icon={<X className="h-4 w-4" />}
+              variant="ghost"
+              size="sm"
+              onClick={exitSelectMode}
+              disabled={bulkUninstall.isPending}
+              aria-label="Exit select mode"
+            />
+          </Tooltip>
 
-        <div className="h-5 w-px bg-surface-600" />
+          <span className="px-2 text-sm whitespace-nowrap text-surface-200">
+            <span className="font-semibold text-accent-400">{selectedCount}</span> selected
+            {hiddenCount > 0 && (
+              <span className="ml-1 text-surface-500">· {hiddenCount} hidden</span>
+            )}
+          </span>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleSelectAllVisible}
-          disabled={visibleIds.length === 0 || allVisibleSelected}
-          left={<CheckSquare className="h-4 w-4" />}
-        >
-          Select all visible ({visibleIds.length})
-        </Button>
+          <div className="mx-1 h-6 w-px bg-surface-700" />
 
-        <Button variant="ghost" size="sm" onClick={handleClear} disabled={selectedCount === 0}>
-          Clear
-        </Button>
+          <Checkbox
+            size="sm"
+            checked={allVisibleSelected}
+            indeterminate={someVisibleSelected}
+            disabled={visibleIds.length === 0}
+            onCheckedChange={(checked) => (checked ? addMany(visibleIds) : removeMany(visibleIds))}
+            label={`Select all visible (${visibleIds.length})`}
+            className="items-center rounded-lg px-2 py-1.5 whitespace-nowrap transition-colors hover:bg-surface-700"
+          />
 
-        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clear}
+            disabled={selectedCount === 0 || bulkUninstall.isPending}
+          >
+            Clear
+          </Button>
+
+          <div className="mx-1 h-6 w-px bg-surface-700" />
+
           <Button
             variant="filled"
             size="sm"
@@ -120,24 +158,15 @@ export function SelectionActionBar({ visibleMods }: SelectionActionBarProps) {
             left={<Trash2 className="h-4 w-4" />}
             className="bg-red-600 hover:bg-red-500"
           >
-            Uninstall {selectedCount > 0 ? selectedCount : ""} mod{selectedCount === 1 ? "" : "s"}
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={exitSelectMode}
-            disabled={bulkUninstall.isPending}
-            left={<X className="h-4 w-4" />}
-          >
-            Exit
+            Uninstall{selectedCount > 0 ? ` ${selectedCount}` : ""} mod
+            {selectedCount === 1 ? "" : "s"}
           </Button>
         </div>
       </div>
 
       <BulkUninstallDialog
         open={dialogOpen}
-        mods={selectedMods}
+        mods={pendingMods}
         isPending={bulkUninstall.isPending}
         onClose={handleCloseDialog}
         onConfirm={handleConfirmUninstall}

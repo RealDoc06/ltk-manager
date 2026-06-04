@@ -140,6 +140,7 @@ export function useLibraryContent({
   return {
     viewMode,
     dndDisabled,
+    selectMode,
     contentView,
     detailsMod,
     setDetailsMod,
