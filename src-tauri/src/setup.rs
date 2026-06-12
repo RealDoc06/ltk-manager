@@ -5,6 +5,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use crate::deep_link::DeepLinkState;
 use crate::mods::{ModLibrary, ModLibraryState, WadReportState};
 use crate::patcher::PatcherState;
+use crate::platform::LeagueInstall;
 use crate::state::SettingsState;
 use crate::workshop::{Workshop, WorkshopState};
 
@@ -115,17 +116,13 @@ fn initialize_first_run(app_handle: &tauri::AppHandle, settings_state: &Settings
 
     tracing::info!("Attempting auto-detection of League installation...");
 
-    if let Some(exe_path) = ltk_mod_core::auto_detect_league_path() {
-        let path = std::path::Path::new(exe_path.as_str());
+    if let Some(install) = LeagueInstall::auto_detect() {
+        tracing::info!("Auto-detected League at: {:?}", install.install_root);
+        settings.league_path = Some(install.configured_root());
+        settings.first_run_complete = true;
 
-        if let Some(install_root) = path.parent().and_then(|p| p.parent()) {
-            tracing::info!("Auto-detected League at: {:?}", install_root);
-            settings.league_path = Some(install_root.to_path_buf());
-            settings.first_run_complete = true;
-
-            if let Err(e) = crate::state::save_settings_to_disk(app_handle, &settings) {
-                tracing::error!("Failed to save auto-detected settings: {}", e);
-            }
+        if let Err(e) = crate::state::save_settings_to_disk(app_handle, &settings) {
+            tracing::error!("Failed to save auto-detected settings: {}", e);
         }
     } else {
         tracing::info!("Auto-detection did not find League installation");

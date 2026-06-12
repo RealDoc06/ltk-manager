@@ -36,13 +36,15 @@ export function PatcherStatusPill() {
         ? `${testingProjects.length} projects`
         : null;
 
-  const label = building
-    ? testLabel
-      ? `Building ${testLabel}…`
-      : "Building overlay…"
-    : testLabel
-      ? `Testing ${testLabel}`
-      : "Patcher running";
+  const label = status?.message
+    ? status.message
+    : building
+      ? testLabel
+        ? `Building ${testLabel}…`
+        : "Building overlay…"
+      : testLabel
+        ? `Testing ${testLabel}`
+        : "Patcher running";
 
   const tone = building ? "accent" : "running";
 

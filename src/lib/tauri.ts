@@ -21,6 +21,7 @@ import type {
   PackProjectArgs,
   PackResult,
   PatcherConfig,
+  PatcherPreflight,
   PatcherStatus,
   PlatformSupport,
   Profile,
@@ -125,6 +126,7 @@ export const api = {
   startPatcher: (config: PatcherConfig) => invokeResult<void>("start_patcher", { config }),
   stopPatcher: () => invokeResult<void>("stop_patcher"),
   getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
+  preflightPatcher: () => invokeResult<PatcherPreflight>("preflight_patcher"),
 
   // Hotkeys
   pauseHotkeys: () => invokeResult<void>("pause_hotkeys"),

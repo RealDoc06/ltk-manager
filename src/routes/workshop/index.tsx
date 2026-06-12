@@ -42,8 +42,8 @@ function WorkshopIndex() {
   const openNewProjectDialog = useWorkshopDialogsStore((s) => s.openNewProjectDialog);
   const selectAll = useWorkshopSelectionStore((s) => s.selectAll);
 
-  useHotkeys("ctrl+n", () => openNewProjectDialog(), { preventDefault: true });
-  useHotkeys("ctrl+a", () => selectAll(filteredProjects.map((p) => p.path)), {
+  useHotkeys("ctrl+n, meta+n", () => openNewProjectDialog(), { preventDefault: true });
+  useHotkeys("ctrl+a, meta+a", () => selectAll(filteredProjects.map((p) => p.path)), {
     preventDefault: true,
   });
 

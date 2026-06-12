@@ -11,6 +11,7 @@ dist/
 # Editor
 .vscode/
 .idea/
+.DS_Store
 *.sw?
 *.iml
 
@@ -31,6 +32,8 @@ debug/
 target/
 **/*.rs.bk
 *.pdb
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 
 # ts-rs default output (real bindings go to src/lib/bindings/)
 src-tauri/bindings/
@@ -39,6 +42,7 @@ src-tauri/src/lib/bindings/
 # AI local settings
 .claude/
 .mcp.json
+plans/
 
 # Windows
 nul

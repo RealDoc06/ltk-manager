@@ -10,12 +10,17 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
+#[cfg(target_os = "windows")]
 mod compat_flags;
 mod library_index;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "windows")]
 mod patcher_dll;
 mod paths;
 mod processes;
 mod storage_medium;
+#[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "windows")]
@@ -123,6 +128,8 @@ pub struct DiagnosticReport {
 pub(crate) struct CheckCtx {
     /// League install root (e.g. `C:\Riot Games\League of Legends`).
     pub league_path: Option<PathBuf>,
+    /// Canonical, validated League installation.
+    pub league_install: Option<crate::platform::LeagueInstall>,
     /// Resolved mod storage directory — the path the rest of the app actually
     /// uses, with the `app_data_dir` fallback already applied. Only `None` if
     /// even the fallback could not be resolved (no Tauri app-data dir).
@@ -131,7 +138,11 @@ pub(crate) struct CheckCtx {
     /// configured a custom path in Settings).
     pub mod_storage_is_default: bool,
     /// Resource directory containing `cslol-dll.dll`. None if it could not be resolved.
+    #[cfg(target_os = "windows")]
     pub patcher_dll_path: Option<PathBuf>,
+    /// Native macOS helper path.
+    #[cfg(target_os = "macos")]
+    pub patcher_helper_path: Option<PathBuf>,
     /// Manager executable path. Unused by phase-1 checks but kept for the
     /// future handle-leak / signature checks on the manager itself.
     #[allow(dead_code)]
@@ -177,28 +188,44 @@ pub(crate) fn check(
 /// at this layer — checks that fail to gather data report a `Warn` or `Bad`
 /// severity rather than propagating an error.
 pub fn run_all(ctx: &CheckCtx) -> Vec<Check> {
-    vec![
-        // System
+    let mut checks = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    checks.extend([
         windows::check_version(),
         windows::check_long_paths_enabled(),
         windows::check_uac_enabled(),
-        // Manager
-        processes::check_manager_not_admin(),
-        // League
-        paths::check_league_path(ctx),
-        paths::check_league_writability(ctx),
-        compat_flags::check_compat_flags(),
-        // Storage
+    ]);
+    #[cfg(target_os = "macos")]
+    checks.extend(macos::system_checks(ctx));
+
+    checks.push(processes::check_manager_not_admin());
+    checks.push(paths::check_league_path(ctx));
+    #[cfg(target_os = "windows")]
+    {
+        checks.push(paths::check_league_writability(ctx));
+        checks.push(compat_flags::check_compat_flags());
+    }
+    #[cfg(target_os = "macos")]
+    checks.push(paths::check_league_readability(ctx));
+
+    checks.extend([
         paths::check_storage_path(ctx),
         paths::check_storage_writability(ctx),
         paths::check_storage_in_league(ctx),
         paths::check_free_space(ctx),
         storage_medium::check_storage_medium(ctx),
-        // Patcher
+    ]);
+
+    #[cfg(target_os = "windows")]
+    checks.extend([
         patcher_dll::check_dll_present(ctx),
         patcher_dll::check_dll_signature(ctx),
         patcher_dll::check_dll_not_locked(ctx),
-        // Library
-        library_index::check_library_index(ctx),
-    ]
+    ]);
+    #[cfg(target_os = "macos")]
+    checks.extend(macos::patcher_checks(ctx));
+
+    checks.push(library_index::check_library_index(ctx));
+    checks
 }

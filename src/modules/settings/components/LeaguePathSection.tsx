@@ -102,8 +102,9 @@ export function LeaguePathSection({ settings, onSave }: SettingsSectionProps) {
         </Button>
         {leaguePathValid === false && settings.leaguePath && (
           <p className="text-sm text-red-400">
-            Could not find League of Legends at this path. Make sure it points to the folder
-            containing the <code className="rounded bg-surface-700 px-1">Game</code> directory.
+            Could not find League of Legends at this path. Select the League application bundle, its{" "}
+            <code className="rounded bg-surface-700 px-1">Contents/LoL</code> directory, or the
+            resolved <code className="rounded bg-surface-700 px-1">Game</code> directory.
           </p>
         )}
       </div>

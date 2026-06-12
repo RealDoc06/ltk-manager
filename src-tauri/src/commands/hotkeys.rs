@@ -2,7 +2,9 @@ use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
 use crate::hotkeys::{HotkeyAction, HotkeyManager};
 use crate::mods::ModLibraryState;
 use crate::patcher::PatcherState;
+use crate::platform::LeagueInstall;
 use crate::state::{save_settings_to_disk, SettingsState};
+#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -42,7 +44,14 @@ pub(crate) fn execute_hot_reload(app_handle: &AppHandle) -> AppResult<()> {
     }
 
     wait_for_patcher_stop(&patcher_state)?;
-    kill_league_process();
+    let league_install = {
+        let settings = settings_state.0.lock().mutex_err()?;
+        settings
+            .league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
+    };
+    kill_league_process(league_install.as_ref());
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     let workshop_projects = config.workshop_projects.clone();
@@ -64,12 +73,14 @@ pub(crate) fn execute_hot_reload(app_handle: &AppHandle) -> AppResult<()> {
     )?;
 
     // Best-effort LCU reconnect (in background — retries take time)
-    let league_path = {
+    let league_install = {
         let s = settings_state.0.lock().mutex_err()?;
-        s.league_path.clone()
+        s.league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
     };
-    if let Some(path) = league_path {
-        std::thread::spawn(move || try_lcu_reconnect(&path));
+    if let Some(install) = league_install {
+        std::thread::spawn(move || try_lcu_reconnect(&install));
     }
 
     // Emit workshop project paths so frontend can re-sync testing state
@@ -97,7 +108,14 @@ pub(crate) fn execute_kill_league(app_handle: &AppHandle) -> AppResult<()> {
         wait_for_patcher_stop(&patcher_state)?;
     }
 
-    kill_league_process();
+    let league_install = {
+        let settings = settings_state.0.lock().mutex_err()?;
+        settings
+            .league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
+    };
+    kill_league_process(league_install.as_ref());
     Ok(())
 }
 
@@ -220,7 +238,14 @@ fn hot_reload_mods_inner(
     }
 
     wait_for_patcher_stop(state)?;
-    kill_league_process();
+    let league_install = {
+        let settings = settings.0.lock().mutex_err()?;
+        settings
+            .league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
+    };
+    kill_league_process(league_install.as_ref());
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     let patcher_config = PatcherConfig {
@@ -234,12 +259,14 @@ fn hot_reload_mods_inner(
     start_patcher_inner(patcher_config, app_handle, state, settings, library)?;
 
     // Best-effort LCU reconnect (in background — retries take time)
-    let league_path = {
+    let league_install = {
         let s = settings.0.lock().mutex_err()?;
-        s.league_path.clone()
+        s.league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
     };
-    if let Some(path) = league_path {
-        std::thread::spawn(move || try_lcu_reconnect(&path));
+    if let Some(install) = league_install {
+        std::thread::spawn(move || try_lcu_reconnect(&install));
     }
 
     Ok(())
@@ -270,7 +297,14 @@ fn kill_league_inner(
         wait_for_patcher_stop(state)?;
     }
 
-    kill_league_process();
+    let league_install = {
+        let settings = settings.0.lock().mutex_err()?;
+        settings
+            .league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok())
+    };
+    kill_league_process(league_install.as_ref());
     Ok(())
 }
 
@@ -305,13 +339,15 @@ struct LockfileData {
 
 /// Read and parse the League Client lockfile.
 /// Format: `LeagueClient:pid:port:password:https` (5-part) or `process:port:password:protocol` (4-part).
-fn read_lockfile(league_path: &Path) -> Option<LockfileData> {
-    let lockfile_path = league_path.join("lockfile");
-
-    let content = match std::fs::read_to_string(&lockfile_path) {
+fn read_lockfile(install: &LeagueInstall) -> Option<LockfileData> {
+    let content = match std::fs::read_to_string(&install.client_lockfile) {
         Ok(s) => s,
         Err(e) => {
-            tracing::debug!("Could not read lockfile at {:?}: {}", lockfile_path, e);
+            tracing::debug!(
+                "Could not read lockfile at {:?}: {}",
+                install.client_lockfile,
+                e
+            );
             return None;
         }
     };
@@ -353,8 +389,8 @@ fn read_lockfile(league_path: &Path) -> Option<LockfileData> {
 
 /// Attempt to reconnect to League via the LCU API (best-effort, non-fatal).
 /// Retries several times with delays to give the client time to process the game exit.
-fn try_lcu_reconnect(league_path: &Path) {
-    let lockfile = match read_lockfile(league_path) {
+fn try_lcu_reconnect(install: &LeagueInstall) {
+    let lockfile = match read_lockfile(install) {
         Some(data) => data,
         None => {
             tracing::debug!("No lockfile found, skipping LCU reconnect");
@@ -445,7 +481,7 @@ fn try_lcu_reconnect_once(client: &reqwest::blocking::Client, lockfile: &Lockfil
 }
 
 /// Kill the League of Legends game process.
-fn kill_league_process() {
+fn kill_league_process(_install: Option<&LeagueInstall>) {
     tracing::info!("Killing League of Legends process");
 
     #[cfg(target_os = "windows")]
@@ -454,9 +490,19 @@ fn kill_league_process() {
         .spawn();
 
     #[cfg(target_os = "macos")]
-    let result = Command::new("pkill")
-        .args(["-f", "League of Legends"])
-        .spawn();
+    let result = _install
+        .and_then(find_exact_macos_game_pid)
+        .map(|pid| {
+            Command::new("/bin/kill")
+                .args(["-KILL", &pid.to_string()])
+                .spawn()
+        })
+        .unwrap_or_else(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "The configured League game process is not running",
+            ))
+        });
 
     #[cfg(target_os = "linux")]
     let result = Command::new("pkill")
@@ -488,4 +534,28 @@ fn kill_league_process() {
             tracing::warn!("Failed to spawn kill command: {}", e);
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn find_exact_macos_game_pid(install: &LeagueInstall) -> Option<u32> {
+    let expected = std::fs::canonicalize(&install.game_executable)
+        .unwrap_or_else(|_| install.game_executable.clone());
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,comm="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            let split = line.find(char::is_whitespace)?;
+            let pid = line[..split].trim().parse::<u32>().ok()?;
+            let executable = Path::new(line[split..].trim());
+            let executable =
+                std::fs::canonicalize(executable).unwrap_or_else(|_| executable.to_path_buf());
+            (executable == expected).then_some(pid)
+        })
 }

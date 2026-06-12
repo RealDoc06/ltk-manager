@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/ltk-macos-patcher"],
+    "resources": [],
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

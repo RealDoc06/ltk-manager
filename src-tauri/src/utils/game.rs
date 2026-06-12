@@ -1,31 +1,19 @@
 //! Read-only utilities for resolving and inspecting a League game directory.
 
 use crate::error::{AppError, AppResult};
+use crate::platform::LeagueInstall;
 use crate::state::Settings;
 use std::path::{Path, PathBuf};
 
 /// Resolve the game directory (the one containing `DATA`) from settings.
 ///
-/// Users may configure either the install root (`…/League of Legends`) or the
-/// `Game` subdirectory directly; both are accepted.
+/// Users may configure any path accepted by the platform install resolver.
 pub(crate) fn resolve_game_dir(settings: &Settings) -> AppResult<PathBuf> {
     let league_root = settings
         .league_path
-        .clone()
+        .as_ref()
         .ok_or_else(|| AppError::ValidationFailed("League path is not configured".to_string()))?;
-
-    let game_dir = league_root.join("Game");
-    if game_dir.exists() {
-        return Ok(game_dir);
-    }
-    if league_root.join("DATA").exists() {
-        return Ok(league_root);
-    }
-
-    Err(AppError::ValidationFailed(format!(
-        "League path does not look like an install root or a Game directory: {}",
-        league_root.display()
-    )))
+    Ok(LeagueInstall::resolve(league_root)?.game_dir)
 }
 
 /// Enumerate every `.wad` / `.wad.client` filename under the game's `DATA` directory.
@@ -120,6 +108,11 @@ mod tests {
     fn resolve_game_dir_with_game_subdir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("Game")).unwrap();
+        std::fs::write(
+            dir.path().join("Game").join("League of Legends.exe"),
+            b"fixture",
+        )
+        .unwrap();
 
         let settings = Settings {
             league_path: Some(dir.path().to_path_buf()),
@@ -133,13 +126,14 @@ mod tests {
     fn resolve_game_dir_with_data_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("DATA")).unwrap();
+        std::fs::write(dir.path().join("League of Legends.exe"), b"fixture").unwrap();
 
         let settings = Settings {
             league_path: Some(dir.path().to_path_buf()),
             ..Settings::default()
         };
         let result = resolve_game_dir(&settings).unwrap();
-        assert_eq!(result, dir.path().to_path_buf());
+        assert_eq!(result, std::fs::canonicalize(dir.path()).unwrap());
     }
 
     #[test]

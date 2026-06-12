@@ -22,6 +22,7 @@ export type ErrorCode =
   | "FANTOME"
   | "WAD"
   | "PATCHER_RUNNING"
+  | "PATCHER_BACKEND"
   | "ZIP"
   | "SCHEMA_VERSION_TOO_NEW"
   | "WORKSHOP";

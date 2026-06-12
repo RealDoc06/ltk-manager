@@ -1,4 +1,5 @@
 use crate::error::{AppResult, IpcResult, MutexResultExt};
+use crate::platform::LeagueInstall;
 use crate::state::{save_settings_to_disk, Settings, SettingsState};
 use crate::utils::game::{list_game_wads, resolve_game_dir};
 use std::path::PathBuf;
@@ -54,28 +55,15 @@ pub fn auto_detect_league_path() -> IpcResult<Option<PathBuf>> {
 }
 
 fn auto_detect_league_path_inner() -> Option<PathBuf> {
-    let exe_path = ltk_mod_core::auto_detect_league_path()?;
-    let path = std::path::Path::new(&exe_path);
-
-    // Navigate from "Game/League of Legends.exe" to installation root
-    let install_root = path.parent()?.parent()?;
-
-    tracing::info!("Found League installation at: {:?}", install_root);
-    Some(install_root.to_path_buf())
+    let install = LeagueInstall::auto_detect()?;
+    tracing::info!("Found League installation at: {:?}", install.install_root);
+    Some(install.configured_root())
 }
 
 /// Validate a League installation path.
 #[tauri::command]
 pub fn validate_league_path(path: PathBuf) -> IpcResult<bool> {
-    let valid = if cfg!(target_os = "macos") {
-        // Path points to the .app bundle (e.g. /Applications/League of Legends.app)
-        path.join("Contents").join("LoL").join("Game").exists()
-            // Path points to the LoL root inside the bundle
-            || path.join("Game").join("League of Legends.app").exists()
-    } else {
-        path.join("Game").join("League of Legends.exe").exists()
-    };
-    IpcResult::ok(valid)
+    IpcResult::ok(LeagueInstall::resolve(path).is_ok())
 }
 
 /// List every WAD filename under the configured League install's `DATA` directory.

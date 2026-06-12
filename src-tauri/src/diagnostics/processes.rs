@@ -34,7 +34,32 @@ pub fn check_manager_not_admin() -> Check {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn check_manager_not_admin() -> Check {
+    if unsafe { libc::geteuid() } == 0 {
+        let mut result = check(
+            "process.manager_not_admin",
+            "LTK Manager not running as root",
+            Category::Manager,
+            Severity::Bad,
+            "LTK Manager is running as root",
+        );
+        result.suggestion = Some(
+            "Close LTK Manager and launch it normally. Only the one-shot patcher helper should receive administrator privileges."
+                .into(),
+        );
+        result
+    } else {
+        super::check_ok(
+            "process.manager_not_admin",
+            "LTK Manager not running as root",
+            Category::Manager,
+            "Not elevated",
+        )
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn check_manager_not_admin() -> Check {
     check(
         "process.manager_not_admin",

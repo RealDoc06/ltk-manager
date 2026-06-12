@@ -13,7 +13,16 @@ const sizeClasses = {
 
 export const Kbd = forwardRef<HTMLElement, KbdProps>(
   ({ shortcut, size = "sm", className, ...props }, ref) => {
-    const keys = shortcut.split("+");
+    const isMac =
+      typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+    const keys = shortcut.split("+").map((key) => {
+      if (key === "CommandOrControl") return isMac ? "⌘" : "Ctrl";
+      if (!isMac) return key;
+      if (key === "Ctrl" || key === "Super" || key === "Cmd") return "⌘";
+      if (key === "Alt") return "⌥";
+      if (key === "Shift") return "⇧";
+      return key;
+    });
 
     return (
       <span

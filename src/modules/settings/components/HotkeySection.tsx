@@ -92,10 +92,9 @@ function HotkeyInput({ label, description, value, onSet }: HotkeyInputProps) {
     }
 
     const keys: string[] = [];
-    if (e.ctrlKey) keys.push("Ctrl");
+    if (e.ctrlKey || e.metaKey) keys.push("CommandOrControl");
     if (e.altKey) keys.push("Alt");
     if (e.shiftKey) keys.push("Shift");
-    if (e.metaKey) keys.push("Super");
 
     const mainKey = e.key;
     // Ignore standalone modifier keys
@@ -103,7 +102,10 @@ function HotkeyInput({ label, description, value, onSet }: HotkeyInputProps) {
 
     // Require at least one modifier
     if (keys.length === 0) {
-      toast.warning("Hotkey must include a modifier", "Use Ctrl, Alt, Shift, or Super with a key.");
+      toast.warning(
+        "Hotkey must include a modifier",
+        "Use Command/Ctrl, Alt/Option, or Shift with a key.",
+      );
       return;
     }
 

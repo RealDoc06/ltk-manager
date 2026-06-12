@@ -5,6 +5,7 @@ The next-generation mod manager for League of Legends, built by the [League Tool
 [![Releases](https://img.shields.io/github/v/release/LeagueToolkit/ltk-manager?style=for-the-badge)](https://github.com/LeagueToolkit/ltk-manager/releases)
 [![License: MIT/Apache-2.0](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue?style=for-the-badge)](https://github.com/LeagueToolkit/ltk-manager)
 [![Windows 10+](https://img.shields.io/badge/Windows-10+-0078D4?style=for-the-badge&logo=windows)](https://www.microsoft.com/windows)
+[![macOS 13+ ARM64](https://img.shields.io/badge/macOS-13%2B_ARM64-000000?style=for-the-badge&logo=apple)](docs/DEVELOPMENT.md#apple-silicon-development)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FLeagueToolkit%2Fltk-manager.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FLeagueToolkit%2Fltk-manager?ref=badge_shield)
 
 ---
@@ -40,7 +41,9 @@ The next-generation mod manager for League of Legends, built by the [League Tool
 
 ### Prerequisites
 
-- **Windows 10 or 11** (64-bit). macOS and Linux support is planned.
+- **Windows 10 or 11** (64-bit) for released installers.
+- **macOS 13 or newer on Apple Silicon** for local source builds. Public macOS packages, Intel
+  support, notarization, and auto-updates are not currently provided.
 - **League of Legends** — a valid game installation.
 
 ### Installation
@@ -55,6 +58,10 @@ The next-generation mod manager for League of Legends, built by the [League Tool
 1. Download a mod in `.modpkg` or `.fantome` format from your preferred source.
 2. Drag and drop the file onto the LTK Manager window, or use the install button.
 3. Enable the mod in your library and click **Run** to start the patcher.
+
+Apple Silicon developers should use `pnpm macos:dev`, which builds the native ARM64 helper before
+starting Tauri. See the [Apple Silicon development guide](docs/DEVELOPMENT.md#apple-silicon-development)
+for the required local approval and preflight workflow.
 
 ---
 
@@ -74,6 +81,13 @@ If you are a developer looking to reuse this DLL in your own launcher or tool, y
 4. **No Reverse Engineering** — Patching or tampering with the DLL itself is strictly prohibited.
 
 For full terms, see [LICENSE-CSLOL.md](LICENSE-CSLOL.md).
+
+### macOS helper
+
+The native macOS patcher is a separate MIT-licensed process under `macos-patcher/`. Its ARM64
+Mach-O scanner and WAD redirection mechanism are adapted from the separately MIT-licensed
+`cslol-tools` subtree of cslol-manager. See `macos-patcher/NOTICE.md` for the pinned source commit
+and attribution.
 
 ---
 

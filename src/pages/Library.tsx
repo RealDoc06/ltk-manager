@@ -37,7 +37,7 @@ export function Library({ folderId }: LibraryProps = {}) {
   const [migrationOpen, setMigrationOpen] = useState(false);
 
   const { data: platform } = usePlatformSupport();
-  const patcherAvailable = platform?.patcherAvailable ?? true;
+  const patcherAvailable = platform?.patcher.ready ?? true;
 
   const { data: mods = [], isLoading, error } = useInstalledMods();
   const actions = useLibraryActions();
@@ -65,12 +65,12 @@ export function Library({ folderId }: LibraryProps = {}) {
     setOrderedIds(visibleMods.map((m) => m.id));
   }, [visibleMods, setOrderedIds]);
 
-  useHotkeys("ctrl+i", () => actions.handleInstallMod(), {
+  useHotkeys("ctrl+i, meta+i", () => actions.handleInstallMod(), {
     preventDefault: true,
     enabled: !isPatcherActive,
   });
   useHotkeys(
-    "ctrl+p",
+    "ctrl+p, meta+p",
     () => {
       if (patcherStatus?.running) {
         handleStopPatcher();
@@ -135,7 +135,7 @@ export function Library({ folderId }: LibraryProps = {}) {
       )}
       {!patcherAvailable && (
         <div className="px-4 pt-3">
-          <PatcherUnsupported />
+          <PatcherUnsupported platform={platform} />
         </div>
       )}
       <LibraryToolbar

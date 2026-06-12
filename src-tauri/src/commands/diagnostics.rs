@@ -7,14 +7,22 @@
 
 use crate::diagnostics::{run_all, CheckCtx, DiagnosticReport};
 use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
+#[cfg(target_os = "windows")]
 use crate::legacy_patcher::api::PATCHER_DLL_NAME;
+#[cfg(target_os = "macos")]
+use crate::patcher::backend::resolve_helper_path;
+use crate::platform::LeagueInstall;
 use crate::state::{get_app_data_dir, SettingsState};
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, State};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 
 /// Same lookup chain as `commands::patcher::resolve_patcher_dll_path`, but
 /// returns `None` instead of an error so we can still report the rest of the
 /// diagnostics when the DLL is missing.
+#[cfg(target_os = "windows")]
 fn resolve_patcher_dll(app_handle: &AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = app_handle.path().resource_dir() {
         let p = dir.join(PATCHER_DLL_NAME);
@@ -144,9 +152,16 @@ fn run_diagnostics_inner(
         .or_else(|| get_app_data_dir(app_handle));
     let ctx = CheckCtx {
         league_path: snapshot.league_path.clone(),
+        league_install: snapshot
+            .league_path
+            .as_ref()
+            .and_then(|path| LeagueInstall::resolve(path).ok()),
         mod_storage_path,
         mod_storage_is_default: storage_is_default,
+        #[cfg(target_os = "windows")]
         patcher_dll_path: resolve_patcher_dll(app_handle),
+        #[cfg(target_os = "macos")]
+        patcher_helper_path: resolve_helper_path(app_handle),
         manager_exe: std::env::current_exe().ok(),
     };
     let checks = run_all(&ctx);

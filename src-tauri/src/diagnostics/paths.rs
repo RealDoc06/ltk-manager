@@ -75,8 +75,18 @@ fn free_disk_bytes(path: &Path) -> Option<u64> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn free_disk_bytes(_path: &Path) -> Option<u64> {
-    None
+fn free_disk_bytes(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    let stats = unsafe { stats.assume_init() };
+    Some((stats.f_bavail as u64).saturating_mul(stats.f_frsize))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -123,10 +133,7 @@ pub fn check_league_path(ctx: &CheckCtx) -> Check {
             "Not configured",
         );
     };
-    let game_exe = p.join("Game").join("League of Legends.exe");
-    let mac_path = p.join("Contents").join("LoL").join("Game");
-    let exists = game_exe.exists() || mac_path.exists();
-    if !exists {
+    let Some(install) = ctx.league_install.as_ref() else {
         let mut c = check(
             "paths.league.exists",
             "League installation path",
@@ -141,12 +148,12 @@ pub fn check_league_path(ctx: &CheckCtx) -> Check {
                 .into(),
         );
         return c;
-    }
+    };
     let mut c = check_ok(
         "paths.league.exists",
         "League installation path",
         Category::League,
-        &p.display().to_string(),
+        &install.game_dir.display().to_string(),
     );
     let len = p.display().to_string().len();
     if len > PATH_LEN_WARN {
@@ -179,6 +186,55 @@ pub fn check_league_path(ctx: &CheckCtx) -> Check {
     c
 }
 
+#[cfg(target_os = "macos")]
+pub fn check_league_readability(ctx: &CheckCtx) -> Check {
+    let Some(install) = ctx.league_install.as_ref() else {
+        return check(
+            "paths.league.readable",
+            "League game data is readable",
+            Category::League,
+            Severity::Info,
+            "League path is not configured or invalid",
+        );
+    };
+    let data = install.game_dir.join("DATA");
+    match std::fs::read_dir(&data) {
+        Ok(_) => {
+            let mut result = check_ok(
+                "paths.league.readable",
+                "League game data is readable",
+                Category::League,
+                "Readable without modifying Riot's files",
+            );
+            result
+                .details
+                .push(CheckDetail::new("path", data.display().to_string()));
+            result
+        }
+        Err(error) => {
+            let mut result = check(
+                "paths.league.readable",
+                "League game data is readable",
+                Category::League,
+                Severity::Bad,
+                "Cannot read League's DATA directory",
+            );
+            result
+                .details
+                .push(CheckDetail::new("path", data.display().to_string()));
+            result
+                .details
+                .push(CheckDetail::new("error", error.to_string()));
+            result.suggestion = Some(
+                "Confirm the selected application is a complete Riot League installation and that the current user can read it."
+                    .into(),
+            );
+            result
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn check_league_writability(ctx: &CheckCtx) -> Check {
     let Some(p) = ctx.league_path.as_ref() else {
         return check(

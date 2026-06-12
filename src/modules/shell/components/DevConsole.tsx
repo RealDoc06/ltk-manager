@@ -43,7 +43,7 @@ export function DevConsole() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
 
-  useHotkeys("ctrl+shift+d", toggle, { preventDefault: true });
+  useHotkeys("ctrl+shift+d, meta+shift+d", toggle, { preventDefault: true });
 
   // Auto-scroll to bottom when new entries arrive
   useEffect(() => {

@@ -59,9 +59,9 @@ export function Diagnostics() {
               Diagnostics
             </h1>
             <p className="mt-1 text-sm text-surface-400">
-              Checks the most common reasons the patcher fails to load mods. Re-run after changing
-              settings or a Windows update. All checks are read-only — fixes are shown as commands
-              you can copy and run in an elevated terminal.
+              Checks install paths, storage, platform security, and patcher compatibility. Re-run
+              after changing settings, updating the operating system, or installing a League patch.
+              Diagnostic checks are read-only.
             </p>
             {report && (
               <p className="mt-1 text-xs text-surface-500">

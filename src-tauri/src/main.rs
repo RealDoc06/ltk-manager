@@ -8,6 +8,7 @@ mod deep_link;
 mod diagnostics;
 mod error;
 mod hotkeys;
+#[cfg(target_os = "windows")]
 mod legacy_patcher;
 #[cfg(debug_assertions)]
 mod log_layer;
@@ -15,6 +16,7 @@ mod logging;
 mod mods;
 mod overlay;
 pub mod patcher;
+mod platform;
 mod setup;
 mod state;
 mod storage;
@@ -90,6 +92,7 @@ fn main() {
             commands::start_patcher,
             commands::stop_patcher,
             commands::get_patcher_status,
+            commands::preflight_patcher,
             // Hotkeys
             commands::pause_hotkeys,
             commands::resume_hotkeys,

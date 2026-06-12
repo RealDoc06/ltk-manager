@@ -46,11 +46,15 @@ function RootLayout() {
     document.documentElement.dataset.reduceMotion = String(isReducedMotion);
   }, [isReducedMotion]);
 
-  useHotkeys("ctrl+1", () => navigate({ to: "/" }), { preventDefault: true });
-  useHotkeys("ctrl+2", () => navigate({ to: "/workshop" }), { preventDefault: true });
-  useHotkeys("ctrl+,", () => navigate({ to: "/settings" }), { preventDefault: true });
+  useHotkeys("ctrl+1, meta+1", () => navigate({ to: "/" }), { preventDefault: true });
+  useHotkeys("ctrl+2, meta+2", () => navigate({ to: "/workshop" }), {
+    preventDefault: true,
+  });
+  useHotkeys(["ctrl+,", "meta+,"], () => navigate({ to: "/settings" }), {
+    preventDefault: true,
+  });
   useHotkeys(
-    "ctrl+f",
+    "ctrl+f, meta+f",
     () => {
       const input = document.querySelector<HTMLInputElement>('input[placeholder*="Search"]');
       input?.focus();

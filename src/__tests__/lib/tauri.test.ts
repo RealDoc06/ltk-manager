@@ -91,6 +91,22 @@ describe("api", () => {
       await api.stopPatcher();
       expect(mockInvoke).toHaveBeenCalledWith("stop_patcher", undefined);
     });
+
+    it("preflightPatcher invokes the preflight command", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          compatible: true,
+          backend: "macos-arm64-helper",
+          architecture: "arm64",
+          signature: "mac-arm64-pattern-v1",
+          reason: null,
+        },
+      });
+
+      await api.preflightPatcher();
+      expect(mockInvoke).toHaveBeenCalledWith("preflight_patcher", undefined);
+    });
   });
 
   describe("error handling", () => {

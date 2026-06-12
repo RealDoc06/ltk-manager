@@ -44,6 +44,8 @@ pub enum ErrorCode {
     Wad,
     /// Operation blocked because the patcher is running
     PatcherRunning,
+    /// Platform patcher backend or helper failure
+    PatcherBackend,
     /// ZIP error
     Zip,
     /// Library index was written by a newer app version
@@ -208,6 +210,9 @@ pub enum AppError {
     #[error("Cannot modify mods while the patcher is running")]
     PatcherRunning,
 
+    #[error("{code}: {detail}")]
+    PatcherBackend { code: String, detail: String },
+
     #[error("ZIP error: {0}")]
     ZipError(#[from] zip::result::ZipError),
 
@@ -287,6 +292,11 @@ impl From<AppError> for AppErrorResponse {
                 ErrorCode::PatcherRunning,
                 "Stop the patcher before modifying mods",
             ),
+
+            AppError::PatcherBackend { code, detail } => {
+                AppErrorResponse::new(ErrorCode::PatcherBackend, detail.clone())
+                    .with_context(serde_json::json!({ "backendCode": code, "detail": detail }))
+            }
 
             AppError::ZipError(e) => AppErrorResponse::new(ErrorCode::Zip, e.to_string()),
 
@@ -405,6 +415,7 @@ mod tests {
             ErrorCode::Fantome,
             ErrorCode::Wad,
             ErrorCode::PatcherRunning,
+            ErrorCode::PatcherBackend,
             ErrorCode::Zip,
             ErrorCode::SchemaVersionTooNew,
             ErrorCode::Workshop,

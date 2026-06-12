@@ -1,4 +1,7 @@
+#[cfg(target_os = "windows")]
 pub mod api;
+pub mod backend;
+#[cfg(target_os = "windows")]
 pub mod runner;
 
 use std::sync::atomic::AtomicBool;
@@ -15,6 +18,7 @@ use ts_rs::TS;
 pub enum PatcherPhase {
     Idle,
     Building,
+    WaitingForGame,
     Patching,
 }
 
@@ -52,6 +56,10 @@ pub struct PatcherStateInner {
     pub phase: PatcherPhase,
     /// Last patcher config used, for hot-reload.
     pub last_config: Option<StoredPatcherConfig>,
+    /// Active platform backend.
+    pub backend: Option<String>,
+    /// Human-readable backend state.
+    pub message: Option<String>,
 }
 
 impl PatcherStateInner {
@@ -62,6 +70,8 @@ impl PatcherStateInner {
             config_path: None,
             phase: PatcherPhase::Idle,
             last_config: None,
+            backend: None,
+            message: None,
         }
     }
 
@@ -106,6 +116,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PatcherPhase::Building).unwrap(),
             "\"building\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PatcherPhase::WaitingForGame).unwrap(),
+            "\"waitingForGame\""
         );
         assert_eq!(
             serde_json::to_string(&PatcherPhase::Patching).unwrap(),

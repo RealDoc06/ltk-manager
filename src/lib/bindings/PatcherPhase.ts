@@ -3,4 +3,4 @@
 /**
  * Current phase of the patcher lifecycle.
  */
-export type PatcherPhase = "idle" | "building" | "patching";
+export type PatcherPhase = "idle" | "building" | "waitingForGame" | "patching";
