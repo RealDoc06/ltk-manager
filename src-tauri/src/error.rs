@@ -1,4 +1,6 @@
+use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -336,6 +338,20 @@ impl<T, E> MutexResultExt<T> for Result<T, std::sync::PoisonError<E>> {
     }
 }
 
+/// Extension trait for converting an owned `PathBuf` into a `Utf8PathBuf`,
+/// mapping a non-UTF-8 path to an [`AppError::InvalidPath`] labeled with what
+/// the path represents (e.g. `"game directory"`).
+pub trait Utf8PathExt {
+    fn try_into_utf8(self, label: &str) -> AppResult<Utf8PathBuf>;
+}
+
+impl Utf8PathExt for PathBuf {
+    fn try_into_utf8(self, label: &str) -> AppResult<Utf8PathBuf> {
+        Utf8PathBuf::from_path_buf(self)
+            .map_err(|p| AppError::InvalidPath(format!("Non-UTF-8 {label}: {}", p.display())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +502,14 @@ mod tests {
         let mutex = std::sync::Mutex::new(42);
         let guard = mutex.lock().mutex_err().unwrap();
         assert_eq!(*guard, 42);
+    }
+
+    #[test]
+    fn utf8_path_ext_converts_valid_path() {
+        let utf8 = PathBuf::from("/tmp/foo/bar")
+            .try_into_utf8("test path")
+            .unwrap();
+        assert_eq!(utf8.as_str(), "/tmp/foo/bar");
     }
 
     #[test]

@@ -8,6 +8,7 @@ import { useLibraryViewMode } from "@/modules/library/api";
 import { useLibrarySelectionStore } from "@/stores";
 
 import { ActiveFilterChips } from "./ActiveFilterChips";
+import { AnalyzeUncategorizedButton } from "./AnalyzeUncategorizedButton";
 import { FilterPopover } from "./FilterPopover";
 import { SortDropdown } from "./SortDropdown";
 
@@ -112,6 +113,7 @@ export function LibraryToolbar({
               aria-label="Disable all visible mods"
             />
           </Tooltip>
+          <AnalyzeUncategorizedButton disabled={isPatcherActive || isLoading} />
         </div>
 
         {/* Select mode toggle */}

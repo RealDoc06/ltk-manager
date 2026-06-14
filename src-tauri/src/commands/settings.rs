@@ -1,6 +1,6 @@
 use crate::error::{AppResult, IpcResult, MutexResultExt};
-use crate::overlay::{list_game_wads, resolve_game_dir};
 use crate::state::{save_settings_to_disk, Settings, SettingsState};
+use crate::utils::game::{list_game_wads, resolve_game_dir};
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;

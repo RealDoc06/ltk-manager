@@ -1,11 +1,10 @@
-use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
+use crate::error::{AppError, AppResult, IpcResult, MutexResultExt, Utf8PathExt};
 use crate::mods::{
     inspect_modpkg_file, BulkInstallResult, InstalledMod, ModLibraryState, ModWadReport,
     ModpkgInfo, WadReportState,
 };
 use crate::patcher::PatcherState;
 use crate::state::SettingsState;
-use camino::Utf8PathBuf;
 use std::collections::HashMap;
 use tauri::State;
 
@@ -33,7 +32,11 @@ pub fn install_mod(
     let result: AppResult<InstalledMod> = (|| {
         reject_if_patcher_running(&patcher)?;
         let settings = settings.0.lock().mutex_err()?.clone();
-        library.0.install_mod_from_package(&settings, &file_path)
+        let installed = library.0.install_mod_from_package(&settings, &file_path)?;
+        library
+            .0
+            .spawn_categorization(&settings, vec![installed.id.clone()]);
+        Ok(installed)
     })();
     result.into()
 }
@@ -49,7 +52,12 @@ pub fn install_mods(
     let result: AppResult<BulkInstallResult> = (|| {
         reject_if_patcher_running(&patcher)?;
         let settings = settings.0.lock().mutex_err()?.clone();
-        library.0.install_mods_from_packages(&settings, &file_paths)
+        let result = library
+            .0
+            .install_mods_from_packages(&settings, &file_paths)?;
+        let ids = result.installed.iter().map(|m| m.id.clone()).collect();
+        library.0.spawn_categorization(&settings, ids);
+        Ok(result)
     })();
     result.into()
 }
@@ -249,24 +257,27 @@ pub fn analyze_mod_wads(
 ) -> IpcResult<ModWadReport> {
     let result: AppResult<ModWadReport> = (|| {
         let settings_snapshot = settings.0.lock().mutex_err()?.clone();
-        let game_dir = crate::overlay::resolve_game_dir(&settings_snapshot)?;
+        let game_dir = crate::utils::game::resolve_game_dir(&settings_snapshot)?;
         let (profile_dir, mut enabled_mod) = library
             .0
             .build_single_mod_provider(&settings_snapshot, &mod_id)?;
 
-        let utf8_game_dir = Utf8PathBuf::from_path_buf(game_dir)
-            .map_err(|p| AppError::InvalidPath(format!("Non-UTF8 game dir: {}", p.display())))?;
-        let utf8_state_dir = Utf8PathBuf::from_path_buf(profile_dir)
-            .map_err(|p| AppError::InvalidPath(format!("Non-UTF8 profile dir: {}", p.display())))?;
+        let game_dir = game_dir.try_into_utf8("game directory")?;
+        let state_dir = profile_dir.try_into_utf8("profile directory")?;
 
         let upstream = ltk_overlay::OverlayBuilder::analyze_single_mod(
-            &utf8_game_dir,
-            &utf8_state_dir,
+            &game_dir,
+            &state_dir,
             &mut enabled_mod,
         )
         .map_err(|e| AppError::Other(format!("Mod analysis failed: {}", e)))?;
 
-        let report = ModWadReport::from_upstream(upstream);
+        let mut report = ModWadReport::from_upstream(upstream);
+        library.0.apply_precise_categorization(
+            &settings_snapshot,
+            game_dir.as_std_path(),
+            &mut report,
+        );
         let mut store = reports.0.lock().mutex_err()?;
         store.upsert(report.clone())?;
         Ok(store.get(&report.mod_id).unwrap_or(report))

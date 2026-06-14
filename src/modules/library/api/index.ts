@@ -1,11 +1,13 @@
 export { libraryKeys } from "./keys";
 export { useAnalyzeModWads } from "./useAnalyzeModWads";
+export { useAnalyzeUncategorizedMods } from "./useAnalyzeUncategorizedMods";
 export { useBulkInstallMods } from "./useBulkInstallMods";
 export type { BulkUninstallResult } from "./useBulkUninstallMods";
 export { useBulkUninstallMods } from "./useBulkUninstallMods";
 export { useCreateProfile } from "./useCreateProfile";
 export { useDeleteProfile } from "./useDeleteProfile";
 export { useEditMod } from "./useEditMod";
+export { useEffectiveCategories, useModEffectiveCategories } from "./useEffectiveCategories";
 export { useEnableModWithLayers } from "./useEnableModWithLayers";
 export { useFilteredMods } from "./useFilteredMods";
 export type { FilterOptions } from "./useFilterOptions";

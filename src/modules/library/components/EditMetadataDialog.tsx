@@ -1,14 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { Edit3, Image, Trash2 } from "lucide-react";
+import { Edit3, Image, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Button, Dialog, FormField, MultiSelect, useToast } from "@/components";
+import { AutoPill, Button, Dialog, FormField, MultiSelect, useToast } from "@/components";
 import type { InstalledMod } from "@/lib/tauri";
 import { libraryKeys } from "@/modules/library/api/keys";
 import { useEditMod } from "@/modules/library/api/useEditMod";
+import { useModEffectiveCategories } from "@/modules/library/api/useEffectiveCategories";
 import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
+import { normKey } from "@/modules/library/utils/categories";
 import {
   getMapLabel,
   getTagLabel,
@@ -69,6 +71,62 @@ export function EditMetadataDialog({ mod, open, onOpenChange }: EditMetadataDial
     });
     return options;
   }, [mod.maps]);
+
+  const eff = useModEffectiveCategories(mod);
+
+  const currentChampions = useMemo(
+    () =>
+      championsStr
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [championsStr],
+  );
+
+  // Footprint-derived values not already staged in the form become suggestions.
+  const suggestions = useMemo(() => {
+    const championKeys = new Set(currentChampions.map(normKey));
+    return {
+      tags: eff.derivedTags.filter((t) => !tags.has(t)),
+      maps: eff.derivedMaps.filter((m) => !maps.has(m)),
+      champions: eff.derivedChampions.filter((c) => !championKeys.has(normKey(c))),
+    };
+  }, [eff, tags, maps, currentChampions]);
+
+  const hasSuggestions =
+    suggestions.tags.length + suggestions.maps.length + suggestions.champions.length > 0;
+
+  const addTag = (tag: string) => setTags((prev) => new Set(prev).add(tag));
+  const addMap = (map: string) => setMaps((prev) => new Set(prev).add(map));
+  const addChampion = (champion: string) =>
+    setChampionsStr((prev) => {
+      const list = prev
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (list.some((c) => normKey(c) === normKey(champion))) return prev;
+      return [...list, champion].join(", ");
+    });
+
+  const applyAllSuggestions = () => {
+    if (suggestions.tags.length > 0) {
+      setTags((prev) => new Set([...prev, ...suggestions.tags]));
+    }
+    if (suggestions.maps.length > 0) {
+      setMaps((prev) => new Set([...prev, ...suggestions.maps]));
+    }
+    if (suggestions.champions.length > 0) {
+      setChampionsStr((prev) => {
+        const list = prev
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const keys = new Set(list.map(normKey));
+        const additions = suggestions.champions.filter((c) => !keys.has(normKey(c)));
+        return [...list, ...additions].join(", ");
+      });
+    }
+  };
 
   const handleSetThumbnail = async () => {
     const file = await openFileDialog({
@@ -209,6 +267,49 @@ export function EditMetadataDialog({ mod, open, onOpenChange }: EditMetadataDial
               onChange={(e) => setChampionsStr(e.target.value)}
               placeholder="e.g. Riven, Lee Sin"
             />
+
+            {hasSuggestions && (
+              <div className="space-y-2 rounded-lg border border-dashed border-surface-600 bg-surface-800/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-surface-200">
+                    <Sparkles className="h-4 w-4 text-accent-400" />
+                    Auto-detected suggestions
+                  </span>
+                  <Button variant="outline" size="sm" onClick={applyAllSuggestions}>
+                    Apply all
+                  </Button>
+                </div>
+                <p className="text-xs text-surface-400">
+                  Detected from the game files this mod patches. Click to add, then save.
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {suggestions.tags.map((tag) => (
+                    <AutoPill
+                      key={`tag:${tag}`}
+                      label={getTagLabel(tag)}
+                      tone="accent"
+                      onClick={() => addTag(tag)}
+                    />
+                  ))}
+                  {suggestions.champions.map((champion) => (
+                    <AutoPill
+                      key={`champ:${champion}`}
+                      label={champion}
+                      tone="emerald"
+                      onClick={() => addChampion(champion)}
+                    />
+                  ))}
+                  {suggestions.maps.map((map) => (
+                    <AutoPill
+                      key={`map:${map}`}
+                      label={getMapLabel(map)}
+                      tone="sky"
+                      onClick={() => addMap(map)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </Dialog.Body>
 
           <Dialog.Footer>

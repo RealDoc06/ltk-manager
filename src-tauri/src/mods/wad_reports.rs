@@ -5,15 +5,19 @@
 //! They're produced as a side effect of [`crate::overlay::ensure_overlay`] and
 //! on demand via the `analyze_mod_wads` Tauri command.
 
+use super::DerivedCategorization;
 use crate::error::{AppResult, MutexResultExt};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use ts_rs::TS;
 
 const WAD_REPORTS_FILENAME: &str = "wad-reports.json";
-const SCHEMA_VERSION: u32 = 1;
+/// v2 added the persisted `derived` categorization. Older (`v1`) caches load
+/// fine — their missing `derived` defaults to empty and is recomputed coarsely
+/// from `affected_wads` on read, then upgraded to precise on the next analysis.
+const SCHEMA_VERSION: u32 = 2;
 
 /// Per-mod WAD footprint summary sent across the IPC boundary.
 ///
@@ -35,18 +39,33 @@ pub struct ModWadReport {
     /// current values; computed on read, never persisted.
     #[serde(default)]
     pub is_stale: bool,
+    /// Champions / maps / tags derived from the mod's contents. Computed at
+    /// analysis time — precisely from a modpkg's chunk paths when available,
+    /// otherwise coarsely from `affected_wads` — and persisted so reads don't
+    /// re-open the archive. Improving the classifier takes effect on the next
+    /// analysis (e.g. reinstall or "Analyze uncategorized").
+    #[serde(default)]
+    pub derived: DerivedCategorization,
 }
 
 impl ModWadReport {
     /// Construct from an upstream `ltk_overlay::ModWadReport`. Always fresh
     /// (`is_stale = false`); the store flips that flag on subsequent reads.
     pub fn from_upstream(report: ltk_overlay::ModWadReport) -> Self {
-        let affected_wads: Vec<String> = report
-            .affected_wads
-            .into_iter()
-            .map(|p| p.into_string())
-            .collect();
+        // Split the upstream per-WAD entries into the path list we keep and a
+        // transient path→count map. The counts feed the coarse classifier's
+        // spillover suppression but aren't stored — only the resulting `derived`
+        // is persisted.
+        let mut affected_wads = Vec::with_capacity(report.affected_wads.len());
+        let mut overrides_per_wad = HashMap::with_capacity(report.affected_wads.len());
+        for wad in report.affected_wads {
+            let path = String::from(wad.path);
+            overrides_per_wad.insert(path.clone(), wad.override_count);
+            affected_wads.push(path);
+        }
+
         let wad_count = affected_wads.len() as u32;
+        let derived = DerivedCategorization::from_wad_footprint(&affected_wads, &overrides_per_wad);
         Self {
             mod_id: report.mod_id,
             affected_wads,
@@ -56,6 +75,7 @@ impl ModWadReport {
             game_index_fingerprint: report.game_index_fingerprint,
             computed_at: chrono::Utc::now().to_rfc3339(),
             is_stale: false,
+            derived,
         }
     }
 }
@@ -76,6 +96,9 @@ struct CachedWadReport {
     /// Orthogonal to game-index staleness.
     #[serde(default)]
     content_stale: bool,
+    /// Categorization captured at analysis time. Absent on `v1` caches.
+    #[serde(default)]
+    derived: DerivedCategorization,
 }
 
 impl CachedWadReport {
@@ -89,11 +112,12 @@ impl CachedWadReport {
             game_index_fingerprint: report.game_index_fingerprint,
             computed_at: report.computed_at,
             content_stale: false,
+            derived: report.derived,
         }
     }
 
     fn into_report(self, game_index_stale: bool) -> ModWadReport {
-        ModWadReport {
+        let mut report = ModWadReport {
             mod_id: self.mod_id,
             affected_wads: self.affected_wads,
             wad_count: self.wad_count,
@@ -102,7 +126,14 @@ impl CachedWadReport {
             game_index_fingerprint: self.game_index_fingerprint,
             computed_at: self.computed_at,
             is_stale: game_index_stale || self.content_stale,
+            derived: self.derived,
+        };
+        // Pre-v2 caches (and any mod analyzed before precise classification)
+        // carry no persisted categorization — recompute it coarsely on read.
+        if report.derived.is_empty() {
+            report.derived = report.derive_categorization();
         }
+        report
     }
 }
 
@@ -186,14 +217,20 @@ impl WadReportStore {
         }
     }
 
+    /// `true` when `fingerprint` differs from the most recently observed
+    /// game-index fingerprint. An unknown current fingerprint is treated as
+    /// not-stale (nothing to compare against yet).
+    fn game_index_stale(&self, fingerprint: u64) -> bool {
+        self.file
+            .current_game_index_fp
+            .is_some_and(|current| current != fingerprint)
+    }
+
     /// Read a single report, deriving `is_stale` against the most recently
     /// observed game-index fingerprint stored alongside the cache.
     pub fn get(&self, mod_id: &str) -> Option<ModWadReport> {
         let cached = self.file.reports.get(mod_id)?.clone();
-        let is_stale = match self.file.current_game_index_fp {
-            Some(current) => current != cached.game_index_fingerprint,
-            None => false,
-        };
+        let is_stale = self.game_index_stale(cached.game_index_fingerprint);
         Some(cached.into_report(is_stale))
     }
 
@@ -203,11 +240,8 @@ impl WadReportStore {
             .reports
             .iter()
             .map(|(id, cached)| {
-                let game_index_stale = match self.file.current_game_index_fp {
-                    Some(current) => current != cached.game_index_fingerprint,
-                    None => false,
-                };
-                (id.clone(), cached.clone().into_report(game_index_stale))
+                let is_stale = self.game_index_stale(cached.game_index_fingerprint);
+                (id.clone(), cached.clone().into_report(is_stale))
             })
             .collect()
     }
@@ -329,6 +363,7 @@ mod tests {
             game_index_fingerprint: gif,
             computed_at: "2026-04-08T00:00:00Z".to_string(),
             is_stale: false,
+            derived: DerivedCategorization::default(),
         }
     }
 
@@ -356,6 +391,36 @@ mod tests {
         assert_eq!(got.mod_id, "mod-a");
         assert_eq!(got.wad_count, 1);
         assert!(!got.is_stale);
+        // The sample carries no persisted `derived`, so it's recomputed coarsely
+        // from the cached footprint on read.
+        assert_eq!(got.derived.champions, vec!["Aatrox"]);
+        assert_eq!(got.derived.tags, vec!["champion-skin"]);
+    }
+
+    #[test]
+    fn persisted_precise_derived_survives_round_trip() {
+        let dir = tempdir().unwrap();
+        let mut report = sample_report("mod-a", 100);
+        // A precise (chunk-path) classification that the coarse footprint could
+        // never produce — e.g. a summoner-icon mod. It must not be clobbered by
+        // the coarse fallback on read, and must persist across a reload.
+        report.derived = DerivedCategorization {
+            tags: vec!["summoner-icon".to_string()],
+            ..Default::default()
+        };
+        {
+            let mut store = WadReportStore::load(Some(dir.path()));
+            store.upsert(report).unwrap();
+            assert_eq!(
+                store.get("mod-a").unwrap().derived.tags,
+                vec!["summoner-icon"]
+            );
+        }
+        let store = WadReportStore::load(Some(dir.path()));
+        assert_eq!(
+            store.get("mod-a").unwrap().derived.tags,
+            vec!["summoner-icon"]
+        );
     }
 
     #[test]
