@@ -1,4 +1,5 @@
 export * from "./ActiveFilterChips";
+export * from "./AnalyzeUncategorizedButton";
 export * from "./BulkInstallProgress";
 export * from "./BulkInstallResults";
 export * from "./BulkUninstallDialog";

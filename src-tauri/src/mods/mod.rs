@@ -1,3 +1,4 @@
+mod categorize;
 mod folders;
 mod inspect;
 mod library;
@@ -9,6 +10,7 @@ pub(crate) mod watcher;
 
 pub use migration::*;
 
+pub use categorize::{ChampionRoster, DerivedCategorization};
 pub use inspect::{inspect_modpkg_file, ModpkgInfo};
 pub use wad_reports::{ModWadReport, WadReportState};
 

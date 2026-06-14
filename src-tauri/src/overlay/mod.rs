@@ -1,8 +1,7 @@
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, Utf8PathExt};
 use crate::mods::{ModLibrary, WadReportState};
 use crate::state::{Settings, WadBlocklistEntry};
-use camino::Utf8PathBuf;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 
 const SCRIPTS_WAD: &str = "scripts.wad.client";
@@ -43,7 +42,7 @@ impl ModLibrary {
         workshop_project_paths: &[PathBuf],
     ) -> AppResult<PathBuf> {
         let storage_dir = self.storage_dir(settings)?;
-        let game_dir = resolve_game_dir(settings)?;
+        let game_dir = crate::utils::game::resolve_game_dir(settings)?;
         let (profile_slug, enabled_mods) = self.get_enabled_mods_for_overlay(settings)?;
 
         let profile_dir = storage_dir.join("profiles").join(profile_slug.as_str());
@@ -64,17 +63,11 @@ impl ModLibrary {
             enabled_ids.join(", ")
         );
 
-        let utf8_game_dir = Utf8PathBuf::from_path_buf(game_dir.clone()).map_err(|p| {
-            AppError::Other(format!("Non-UTF-8 game directory path: {}", p.display()))
-        })?;
-        let utf8_overlay_root = Utf8PathBuf::from_path_buf(overlay_root.clone()).map_err(|p| {
-            AppError::Other(format!("Non-UTF-8 overlay root path: {}", p.display()))
-        })?;
-        let utf8_state_dir = Utf8PathBuf::from_path_buf(profile_dir).map_err(|p| {
-            AppError::Other(format!("Non-UTF-8 profile directory path: {}", p.display()))
-        })?;
+        let utf8_game_dir = game_dir.clone().try_into_utf8("game directory")?;
+        let utf8_overlay_root = overlay_root.clone().try_into_utf8("overlay root")?;
+        let utf8_state_dir = profile_dir.try_into_utf8("profile directory")?;
 
-        let available_wads = list_game_wads(&game_dir).unwrap_or_else(|e| {
+        let available_wads = crate::utils::game::list_game_wads(&game_dir).unwrap_or_else(|e| {
             tracing::warn!(
                 "Failed to enumerate game WADs for regex expansion: {}; \
                  regex blocklist entries will match nothing",
@@ -112,9 +105,9 @@ impl ModLibrary {
 
         let mut all_mods = Vec::new();
         for project_path in workshop_project_paths {
-            let utf8_path = Utf8PathBuf::from_path_buf(project_path.clone()).map_err(|p| {
-                AppError::Other(format!("Non-UTF-8 workshop project path: {}", p.display()))
-            })?;
+            let utf8_path = project_path
+                .clone()
+                .try_into_utf8("workshop project path")?;
             let dir_name = project_path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -197,7 +190,7 @@ impl ModLibrary {
 ///   can't break the whole patch.
 /// - `block_scripts_wad` and `!patch_tft` add their respective WADs.
 ///
-/// `available_wads` should come from `list_game_wads`; pass an empty slice if
+/// `available_wads` should come from `crate::utils::game::list_game_wads`; pass an empty slice if
 /// enumeration failed (regex entries then match nothing).
 pub(crate) fn resolve_blocked_wads(settings: &Settings, available_wads: &[String]) -> Vec<String> {
     let mut blocked: Vec<String> = Vec::new();
@@ -236,144 +229,9 @@ pub(crate) fn resolve_blocked_wads(settings: &Settings, available_wads: &[String
     blocked
 }
 
-/// Enumerate every `.wad` / `.wad.client` filename under the game's `DATA` directory.
-///
-/// Returns lowercased, deduplicated filenames (not paths) sorted alphabetically.
-/// The WAD filename space is effectively flat from the overlay's perspective —
-/// `OverlayBuilder::with_blocked_wads` matches by filename only — so we discard
-/// the directory part.
-pub(crate) fn list_game_wads(game_dir: &Path) -> AppResult<Vec<String>> {
-    let data_dir = game_dir.join("DATA");
-    if !data_dir.exists() {
-        return Err(AppError::ValidationFailed(format!(
-            "Game DATA directory does not exist: {}",
-            data_dir.display()
-        )));
-    }
-
-    let mut out: Vec<String> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![data_dir];
-    while let Some(dir) = stack.pop() {
-        let read = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("Failed to read {}: {}", dir.display(), e);
-                continue;
-            }
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let lower = name.to_ascii_lowercase();
-            if lower.ends_with(".wad") || lower.ends_with(".wad.client") {
-                out.push(lower);
-            }
-        }
-    }
-
-    out.sort();
-    out.dedup();
-    Ok(out)
-}
-
-pub(crate) fn resolve_game_dir(settings: &Settings) -> AppResult<PathBuf> {
-    let league_root = settings
-        .league_path
-        .clone()
-        .ok_or_else(|| AppError::ValidationFailed("League path is not configured".to_string()))?;
-
-    // Users might configure either the install root (…/League of Legends) or the Game dir (…/League of Legends/Game).
-    // Accept both.
-    let game_dir = league_root.join("Game");
-    if game_dir.exists() {
-        return Ok(game_dir);
-    }
-    if league_root.join("DATA").exists() {
-        return Ok(league_root);
-    }
-
-    Err(AppError::ValidationFailed(format!(
-        "League path does not look like an install root or a Game directory: {}",
-        league_root.display()
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert_matches::assert_matches;
-
-    #[test]
-    fn resolve_game_dir_no_league_path() {
-        let settings = Settings::default();
-        assert_matches!(
-            resolve_game_dir(&settings),
-            Err(AppError::ValidationFailed(_))
-        );
-    }
-
-    #[test]
-    fn resolve_game_dir_with_game_subdir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("Game")).unwrap();
-
-        let settings = Settings {
-            league_path: Some(dir.path().to_path_buf()),
-            ..Settings::default()
-        };
-        let result = resolve_game_dir(&settings).unwrap();
-        assert!(result.ends_with("Game"));
-    }
-
-    #[test]
-    fn resolve_game_dir_with_data_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("DATA")).unwrap();
-
-        let settings = Settings {
-            league_path: Some(dir.path().to_path_buf()),
-            ..Settings::default()
-        };
-        let result = resolve_game_dir(&settings).unwrap();
-        assert_eq!(result, dir.path().to_path_buf());
-    }
-
-    #[test]
-    fn resolve_game_dir_neither_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = Settings {
-            league_path: Some(dir.path().to_path_buf()),
-            ..Settings::default()
-        };
-        assert_matches!(
-            resolve_game_dir(&settings),
-            Err(AppError::ValidationFailed(_))
-        );
-    }
-
-    #[test]
-    fn list_game_wads_finds_nested_wads_and_lowercases() {
-        let dir = tempfile::tempdir().unwrap();
-        let data = dir.path().join("DATA");
-        let final_dir = data.join("FINAL").join("Champions");
-        std::fs::create_dir_all(&final_dir).unwrap();
-        std::fs::write(final_dir.join("Aatrox.wad.client"), b"").unwrap();
-        std::fs::write(final_dir.join("Ahri.wad.client"), b"").unwrap();
-        std::fs::write(data.join("Shared.wad"), b"").unwrap();
-        std::fs::write(final_dir.join("not-a-wad.txt"), b"").unwrap();
-
-        let wads = list_game_wads(dir.path()).unwrap();
-        assert!(wads.contains(&"aatrox.wad.client".to_string()));
-        assert!(wads.contains(&"ahri.wad.client".to_string()));
-        assert!(wads.contains(&"shared.wad".to_string()));
-        assert_eq!(wads.len(), 3);
-    }
 
     #[test]
     fn resolve_blocked_wads_exact_lowercased_and_scripts_added_by_default() {
@@ -452,15 +310,6 @@ mod tests {
         let available = vec!["scripts.wad.client".to_string()];
         let result = resolve_blocked_wads(&settings, &available);
         assert_eq!(result, vec!["scripts.wad.client".to_string()]);
-    }
-
-    #[test]
-    fn list_game_wads_errors_when_data_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_matches!(
-            list_game_wads(dir.path()),
-            Err(AppError::ValidationFailed(_))
-        );
     }
 
     #[test]

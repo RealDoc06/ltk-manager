@@ -12,6 +12,7 @@ export type { ContentEntry } from "./ContentEntry";
 export type { ContentTree } from "./ContentTree";
 export type { CreateProjectArgs } from "./CreateProjectArgs";
 export type { CslolModInfo } from "./CslolModInfo";
+export type { DerivedCategorization } from "./DerivedCategorization";
 export type { DiagnosticReport } from "./DiagnosticReport";
 export type { EditModMetadataArgs } from "./EditModMetadataArgs";
 export type { ErrorCode } from "./ErrorCode";

@@ -1,4 +1,5 @@
 export * from "./AlertBox";
+export * from "./AutoPill";
 export * from "./Button";
 export * from "./ButtonGroup";
 export * from "./Checkbox";
