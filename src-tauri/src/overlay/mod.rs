@@ -7,6 +7,9 @@ use tauri::{Emitter, Manager};
 const SCRIPTS_WAD: &str = "scripts.wad.client";
 const TFT_WAD: &str = "map22.wad.client";
 
+const MACOS_PLATFORM_WADS: &[&str] =
+    &["bootstrap.macos.wad.client", "shadercache.metal.wad.client"];
+
 #[derive(Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
@@ -224,6 +227,12 @@ pub(crate) fn resolve_blocked_wads(settings: &Settings, available_wads: &[String
         blocked.push(TFT_WAD.to_string());
     }
 
+    if cfg!(target_os = "macos") {
+        for wad in MACOS_PLATFORM_WADS {
+            blocked.push(wad.to_string());
+        }
+    }
+
     blocked.sort();
     blocked.dedup();
     blocked
@@ -247,6 +256,19 @@ mod tests {
         assert!(result.contains(&"map22.wad.client".to_string()));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_blocked_wads_includes_macos_platform_wads() {
+        let settings = Settings {
+            block_scripts_wad: false,
+            patch_tft: true,
+            ..Settings::default()
+        };
+        let result = resolve_blocked_wads(&settings, &[]);
+        assert!(result.contains(&"bootstrap.macos.wad.client".to_string()));
+        assert!(result.contains(&"shadercache.metal.wad.client".to_string()));
+    }
+
     #[test]
     fn resolve_blocked_wads_regex_expanded_against_available() {
         let settings = Settings {
@@ -264,13 +286,10 @@ mod tests {
             "aatrox.wad.client".to_string(),
         ];
         let result = resolve_blocked_wads(&settings, &available);
-        assert_eq!(
-            result,
-            vec![
-                "map11.en_us.wad.client".to_string(),
-                "map22.en_us.wad.client".to_string(),
-            ]
-        );
+        assert!(result.contains(&"map11.en_us.wad.client".to_string()));
+        assert!(result.contains(&"map22.en_us.wad.client".to_string()));
+        assert!(!result.contains(&"map12.wad.client".to_string()));
+        assert!(!result.contains(&"aatrox.wad.client".to_string()));
     }
 
     #[test]
@@ -289,7 +308,7 @@ mod tests {
             ..Settings::default()
         };
         let result = resolve_blocked_wads(&settings, &[]);
-        assert_eq!(result, vec!["keeper.wad.client".to_string()]);
+        assert!(result.contains(&"keeper.wad.client".to_string()));
     }
 
     #[test]
@@ -309,7 +328,9 @@ mod tests {
         };
         let available = vec!["scripts.wad.client".to_string()];
         let result = resolve_blocked_wads(&settings, &available);
-        assert_eq!(result, vec!["scripts.wad.client".to_string()]);
+        assert!(result.contains(&"scripts.wad.client".to_string()));
+        let scripts_count = result.iter().filter(|w| *w == "scripts.wad.client").count();
+        assert_eq!(scripts_count, 1);
     }
 
     #[test]
