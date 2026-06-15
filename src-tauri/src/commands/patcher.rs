@@ -201,6 +201,14 @@ pub(crate) fn start_patcher_inner(
             let event_state = Arc::clone(&state_arc);
             let event_app = app_handle_thread.clone();
             let event_sink: PatcherEventSink = Arc::new(move |event: BackendEvent| {
+                tracing::info!(
+                    event = %event.event,
+                    pid = ?event.pid,
+                    architecture = ?event.architecture,
+                    signature = ?event.signature,
+                    detail = ?event.detail,
+                    "Patcher backend event"
+                );
                 if let Ok(mut patcher_state) = event_state.lock() {
                     patcher_state.phase = match event.event.as_str() {
                         "waitingForGame" | "ready" | "gameExited" => PatcherPhase::WaitingForGame,
@@ -243,22 +251,14 @@ pub fn stop_patcher(state: State<PatcherState>) -> IpcResult<()> {
     stop_patcher_inner(&state).into()
 }
 
-pub(crate) fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
-    let handle = {
-        let mut patcher_state = state.0.lock().mutex_err()?;
-        if !patcher_state.is_running() {
-            return Err(AppError::Other("Patcher is not running".into()));
-        }
-        patcher_state.stop_flag.store(true, Ordering::SeqCst);
-        patcher_state.message = Some("Stopping patcher".into());
-        patcher_state.thread_handle.take()
-    };
-
-    if let Some(handle) = handle {
-        handle
-            .join()
-            .map_err(|_| AppError::Other("Patcher thread panicked while stopping".into()))?;
+pub(crate) fn stop_patcher_inner(state: &PatcherState) -> AppResult<()> {
+    let mut patcher_state = state.0.lock().mutex_err()?;
+    if !patcher_state.is_running() {
+        return Err(AppError::Other("Patcher is not running".into()));
     }
+    tracing::info!("Stopping patcher");
+    patcher_state.stop_flag.store(true, Ordering::SeqCst);
+    patcher_state.message = Some("Stopping patcher".into());
     Ok(())
 }
 
@@ -316,5 +316,33 @@ fn backend_event_message(event: &BackendEvent) -> String {
         "patched" => "League process patched".into(),
         "gameExited" => "League exited; waiting for the next match".into(),
         other => event.detail.clone().unwrap_or_else(|| other.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stop_patcher_signals_without_joining_worker() {
+        let state = PatcherState::new();
+        let worker = thread::spawn(|| thread::sleep(Duration::from_millis(300)));
+        {
+            let mut inner = state.0.lock().unwrap();
+            inner.thread_handle = Some(worker);
+        }
+
+        let started = Instant::now();
+        stop_patcher_inner(&state).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        let worker = {
+            let mut inner = state.0.lock().unwrap();
+            assert!(inner.stop_flag.load(Ordering::SeqCst));
+            assert_eq!(inner.message.as_deref(), Some("Stopping patcher"));
+            inner.thread_handle.take().unwrap()
+        };
+        worker.join().unwrap();
     }
 }

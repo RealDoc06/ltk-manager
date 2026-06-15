@@ -5,8 +5,9 @@ use super::{
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::ops::{Deref, DerefMut};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,10 @@ const HELPER_NAME: &str = "ltk-macos-patcher";
 const HELPER_TARGET_NAME: &str = "ltk-macos-patcher-aarch64-apple-darwin";
 const PROTOCOL_VERSION: u32 = 1;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MACOS_UNIX_SOCKET_PATH_MAX: usize = 103;
+const MAX_HELPER_EVENT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,11 +151,7 @@ impl PatcherBackend for MacOsBackend {
         let game_bundle = &context.league_install.install_root;
 
         let uid = unsafe { libc::getuid() };
-        let session_dir = std::env::temp_dir().join(format!(
-            "dev.leaguetoolkit.manager-{}-{}",
-            uid,
-            Uuid::new_v4()
-        ));
+        let session_dir = helper_session_dir(uid);
         fs::create_dir(&session_dir).map_err(|error| BackendError::Failed {
             code: "HELPER_SESSION_FAILED".into(),
             detail: format!("Failed to create helper session directory: {error}"),
@@ -164,7 +164,7 @@ impl PatcherBackend for MacOsBackend {
         })?;
         let _cleanup = SessionCleanup(session_dir.clone());
 
-        let socket_path = session_dir.join("control.sock");
+        let socket_path = helper_socket_path(&session_dir)?;
         let listener = UnixListener::bind(&socket_path).map_err(|error| BackendError::Failed {
             code: "HELPER_SESSION_FAILED".into(),
             detail: format!("Failed to create helper control socket: {error}"),
@@ -195,12 +195,9 @@ impl PatcherBackend for MacOsBackend {
             code: "HELPER_SESSION_FAILED".into(),
             detail: format!("Failed to clone helper socket: {error}"),
         })?;
-        let mut reader = BufReader::new(stream);
+        let mut reader = HelperEventReader::new(stream);
 
-        let hello = read_helper_event(&mut reader)?.ok_or_else(|| BackendError::Failed {
-            code: "HELPER_PROTOCOL_ERROR".into(),
-            detail: "Helper disconnected before authentication".into(),
-        })?;
+        let hello = read_helper_hello(&mut reader, &mut child, &stop)?;
         if hello.version != PROTOCOL_VERSION
             || hello.event != "hello"
             || hello.token.as_deref() != Some(token.as_str())
@@ -230,6 +227,7 @@ impl PatcherBackend for MacOsBackend {
         )?;
 
         let mut stop_sent = false;
+        let mut stop_deadline = None;
         loop {
             if stop.load(Ordering::SeqCst) && !stop_sent {
                 write_request(
@@ -240,9 +238,14 @@ impl PatcherBackend for MacOsBackend {
                     },
                 )?;
                 stop_sent = true;
+                stop_deadline = Some(Instant::now() + STOP_TIMEOUT);
+            }
+            if stop_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                tracing::warn!("Elevated macOS helper did not acknowledge stop before timeout");
+                return Err(BackendError::Stopped);
             }
 
-            match read_helper_event(&mut reader) {
+            match reader.read_event() {
                 Ok(Some(event)) => {
                     if event.version != PROTOCOL_VERSION {
                         return Err(BackendError::Failed {
@@ -278,6 +281,13 @@ impl PatcherBackend for MacOsBackend {
                     }
                 }
                 Ok(None) => {
+                    if reader.is_eof() {
+                        return Err(BackendError::Failed {
+                            code: "HELPER_DISCONNECTED".into(),
+                            detail: "The elevated helper disconnected before reporting completion"
+                                .into(),
+                        });
+                    }
                     if let Ok(Some(status)) = child.try_wait() {
                         return Err(BackendError::Failed {
                             code: "HELPER_EXITED".into(),
@@ -291,6 +301,24 @@ impl PatcherBackend for MacOsBackend {
             }
         }
     }
+}
+
+fn helper_session_dir(uid: u32) -> PathBuf {
+    PathBuf::from("/tmp").join(format!("ltk-{uid}-{}", Uuid::new_v4().simple()))
+}
+
+fn helper_socket_path(session_dir: &Path) -> BackendResult<PathBuf> {
+    let socket_path = session_dir.join("c");
+    let path_len = socket_path.as_os_str().as_bytes().len();
+    if path_len > MACOS_UNIX_SOCKET_PATH_MAX {
+        return Err(BackendError::Failed {
+            code: "HELPER_SESSION_FAILED".into(),
+            detail: format!(
+                "Helper control socket path is {path_len} bytes; macOS allows at most {MACOS_UNIX_SOCKET_PATH_MAX}"
+            ),
+        });
+    }
+    Ok(socket_path)
 }
 
 pub fn resolve_helper_path(app_handle: &AppHandle) -> Option<PathBuf> {
@@ -415,27 +443,121 @@ fn accept_helper(
     }
 }
 
-fn read_helper_event(reader: &mut BufReader<UnixStream>) -> BackendResult<Option<HelperEvent>> {
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) => Ok(None),
-        Ok(_) if line.len() > 64 * 1024 => Err(BackendError::Failed {
-            code: "HELPER_PROTOCOL_ERROR".into(),
-            detail: "Helper response exceeded 64 KiB".into(),
-        }),
-        Ok(_) => serde_json::from_str(&line)
-            .map(Some)
-            .map_err(|error| BackendError::Failed {
-                code: "HELPER_PROTOCOL_ERROR".into(),
-                detail: format!("Malformed helper event: {error}"),
-            }),
-        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-            Ok(None)
+fn read_helper_hello(
+    reader: &mut HelperEventReader,
+    child: &mut Child,
+    stop: &AtomicBool,
+) -> BackendResult<HelperEvent> {
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            return Err(BackendError::Stopped);
         }
-        Err(error) => Err(BackendError::Failed {
-            code: "HELPER_PROTOCOL_ERROR".into(),
-            detail: format!("Failed to read helper event: {error}"),
-        }),
+        if let Some(event) = reader.read_event()? {
+            return Ok(event);
+        }
+        if reader.is_eof() {
+            return Err(BackendError::Failed {
+                code: "HELPER_PROTOCOL_ERROR".into(),
+                detail: "Helper disconnected before authentication".into(),
+            });
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(BackendError::Failed {
+                code: "HELPER_EXITED".into(),
+                detail: format!("The elevated helper exited before authentication ({status})"),
+            });
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return Err(BackendError::Failed {
+                code: "HELPER_START_TIMEOUT".into(),
+                detail: "Timed out waiting for the helper authentication frame".into(),
+            });
+        }
+    }
+}
+
+struct HelperEventReader {
+    stream: UnixStream,
+    buffer: Vec<u8>,
+    eof: bool,
+}
+
+impl HelperEventReader {
+    fn new(stream: UnixStream) -> Self {
+        Self {
+            stream,
+            buffer: Vec::new(),
+            eof: false,
+        }
+    }
+
+    fn is_eof(&self) -> bool {
+        self.eof
+    }
+
+    fn read_event(&mut self) -> BackendResult<Option<HelperEvent>> {
+        loop {
+            if let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                let mut frame = self.buffer.drain(..=newline).collect::<Vec<_>>();
+                frame.pop();
+                if frame.last() == Some(&b'\r') {
+                    frame.pop();
+                }
+                if frame.is_empty() {
+                    continue;
+                }
+                return serde_json::from_slice(&frame).map(Some).map_err(|error| {
+                    BackendError::Failed {
+                        code: "HELPER_PROTOCOL_ERROR".into(),
+                        detail: format!("Malformed helper event: {error}"),
+                    }
+                });
+            }
+
+            if self.buffer.len() > MAX_HELPER_EVENT_BYTES {
+                return Err(BackendError::Failed {
+                    code: "HELPER_PROTOCOL_ERROR".into(),
+                    detail: "Helper response exceeded 64 KiB".into(),
+                });
+            }
+            if self.eof {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                }
+                return Err(BackendError::Failed {
+                    code: "HELPER_PROTOCOL_ERROR".into(),
+                    detail: "Helper disconnected with an incomplete event".into(),
+                });
+            }
+
+            let mut chunk = [0_u8; 4096];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => self.eof = true,
+                Ok(count) => {
+                    self.buffer.extend_from_slice(&chunk[..count]);
+                    if self.buffer.len() > MAX_HELPER_EVENT_BYTES {
+                        return Err(BackendError::Failed {
+                            code: "HELPER_PROTOCOL_ERROR".into(),
+                            detail: "Helper response exceeded 64 KiB".into(),
+                        });
+                    }
+                }
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(BackendError::Failed {
+                        code: "HELPER_PROTOCOL_ERROR".into(),
+                        detail: format!("Failed to read helper event: {error}"),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -525,5 +647,58 @@ mod tests {
     #[test]
     fn shell_quoting_handles_apostrophes() {
         assert_eq!(shell_quote("/tmp/a'b"), "'/tmp/a'\\''b'");
+    }
+
+    #[test]
+    fn helper_control_socket_uses_a_short_bindable_path() {
+        let session_dir = helper_session_dir(501);
+        let socket_path = helper_socket_path(&session_dir).unwrap();
+        assert!(socket_path.as_os_str().as_bytes().len() <= MACOS_UNIX_SOCKET_PATH_MAX);
+
+        fs::create_dir(&session_dir).unwrap();
+        let _cleanup = SessionCleanup(session_dir);
+        UnixListener::bind(socket_path).unwrap();
+    }
+
+    #[test]
+    fn helper_control_socket_rejects_overlong_paths_before_bind() {
+        let session_dir = PathBuf::from("/tmp").join("x".repeat(MACOS_UNIX_SOCKET_PATH_MAX));
+        assert!(matches!(
+            helper_socket_path(&session_dir),
+            Err(BackendError::Failed { code, .. }) if code == "HELPER_SESSION_FAILED"
+        ));
+    }
+
+    #[test]
+    fn helper_event_reader_preserves_partial_frames_across_timeouts() {
+        let (reader_stream, mut writer) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+        let mut reader = HelperEventReader::new(reader_stream);
+
+        writer.write_all(br#"{"version":1,"event":"wait"#).unwrap();
+        assert!(reader.read_event().unwrap().is_none());
+
+        writer.write_all(b"ingForGame\"}\n").unwrap();
+        let event = reader.read_event().unwrap().unwrap();
+        assert_eq!(event.event, "waitingForGame");
+    }
+
+    #[test]
+    fn helper_event_reader_returns_buffered_frames_one_at_a_time() {
+        let (reader_stream, mut writer) = UnixStream::pair().unwrap();
+        let mut reader = HelperEventReader::new(reader_stream);
+        writer
+            .write_all(
+                b"{\"version\":1,\"event\":\"ready\"}\n{\"version\":1,\"event\":\"patched\",\"pid\":42}\n",
+            )
+            .unwrap();
+
+        let ready = reader.read_event().unwrap().unwrap();
+        let patched = reader.read_event().unwrap().unwrap();
+        assert_eq!(ready.event, "ready");
+        assert_eq!(patched.event, "patched");
+        assert_eq!(patched.pid, Some(42));
     }
 }

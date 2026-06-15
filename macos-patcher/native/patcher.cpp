@@ -25,6 +25,8 @@
 #include <mach/mach.h>
 #include <mach/mach_traps.h>
 #include <mach/mach_vm.h>
+#include <mach/vm_attributes.h>
+#include <mach-o/loader.h>
 #include <unistd.h>
 
 namespace {
@@ -34,6 +36,8 @@ using StopCallback = bool (*)(void*);
 using PtrStorage = std::uint64_t;
 
 constexpr const char* SIGNATURE_ID = "mac-arm64-pattern-v1";
+constexpr std::uint32_t BTI_C = 0xD503245F;
+constexpr auto IMPORT_RESOLUTION_TIMEOUT = std::chrono::seconds(10);
 
 void set_error(char* buffer, std::size_t buffer_len, std::string_view message) {
     if (!buffer || buffer_len == 0) {
@@ -159,6 +163,26 @@ public:
         }
     }
 
+    void read(const void* address, void* destination, std::size_t size) const {
+        mach_vm_size_t bytes_read = 0;
+        const auto result = mach_vm_read_overwrite(
+            task_, reinterpret_cast<mach_vm_address_t>(address), size,
+            reinterpret_cast<mach_vm_address_t>(destination), &bytes_read);
+        if (result != KERN_SUCCESS || bytes_read != size) {
+            throw std::runtime_error("mach_vm_read_overwrite failed with code " +
+                                     std::to_string(result));
+        }
+    }
+
+    void write_verified(void* address, const void* source, std::size_t size) const {
+        write(address, source, size);
+        std::vector<std::uint8_t> actual(size);
+        read(address, actual.data(), size);
+        if (std::memcmp(actual.data(), source, size) != 0) {
+            throw std::runtime_error("Target memory verification failed after patch write");
+        }
+    }
+
     void writable(void* address, std::size_t size) const {
         const auto result =
             mach_vm_protect(task_, reinterpret_cast<mach_vm_address_t>(address), size, FALSE,
@@ -177,6 +201,42 @@ public:
             throw std::runtime_error("mach_vm_protect executable failed with code " +
                                      std::to_string(result));
         }
+
+        auto cache_operation = MATTR_VAL_CACHE_SYNC;
+        auto cache_result = mach_vm_machine_attribute(
+            task_, reinterpret_cast<mach_vm_address_t>(address), size, MATTR_CACHE,
+            &cache_operation);
+        if (cache_result != KERN_SUCCESS) {
+            cache_operation = MATTR_VAL_CACHE_FLUSH;
+            cache_result = mach_vm_machine_attribute(
+                task_, reinterpret_cast<mach_vm_address_t>(address), size, MATTR_CACHE,
+                &cache_operation);
+        }
+        if (cache_result != KERN_SUCCESS) {
+            throw std::runtime_error("Failed to synchronize target instruction cache with code " +
+                                     std::to_string(cache_result));
+        }
+    }
+
+    void suspend() const {
+        const auto result = task_suspend(task_);
+        if (result != KERN_SUCCESS) {
+            throw std::runtime_error("task_suspend failed with code " +
+                                     std::to_string(result));
+        }
+    }
+
+    void resume() const noexcept {
+        (void)task_resume(task_);
+    }
+
+    void verify_arm64() {
+        mach_header_64 header{};
+        const auto image_address = base() + 0x100000000ULL;
+        read(reinterpret_cast<const void*>(image_address), &header, sizeof(header));
+        if (header.magic != MH_MAGIC_64 || header.cputype != CPU_TYPE_ARM64) {
+            throw std::runtime_error("League game process is not running as ARM64");
+        }
     }
 
 private:
@@ -185,10 +245,19 @@ private:
     PtrStorage base_ = 0;
 };
 
-struct PayloadFopenHook {
-    unsigned char fopen_hook[0x100]{};
-    PtrStorage fopen_org_ptr{};
-    char prefix[0x100]{};
+class TaskSuspension {
+public:
+    explicit TaskSuspension(const Process& process) : process_(process) {
+        process_.suspend();
+    }
+    TaskSuspension(const TaskSuspension&) = delete;
+    TaskSuspension& operator=(const TaskSuspension&) = delete;
+    ~TaskSuspension() {
+        process_.resume();
+    }
+
+private:
+    const Process& process_;
 };
 
 __asm__(R"(
@@ -196,6 +265,8 @@ __asm__(R"(
 
 .global _fopen_hook_shellcode_beg
 .global _fopen_hook_shellcode_end
+.global _fopen_hook_original_ptr
+.global _fopen_hook_prefix
 
 .set buffer_size, 0x200
 
@@ -206,6 +277,7 @@ fopen_org .req x22
 
 .p2align 8
 _fopen_hook_shellcode_beg:
+    bti     c
     stp     fp, lr, [sp, #-16]!
     mov     fp, sp
     stp     filename, mode, [sp, #-16]!
@@ -216,7 +288,6 @@ _fopen_hook_shellcode_beg:
     mov     mode, x1
 
     adr     fopen_org, Lfopen_org_ref
-    ldr     fopen_org, [fopen_org]
     ldr     fopen_org, [fopen_org]
 
 Lcheck_args_not_null:
@@ -295,44 +366,37 @@ Lreturn:
 .p2align 8
 _fopen_hook_shellcode_end:
 Lfopen_org_ref:
+_fopen_hook_original_ptr:
     .quad   0x11223344556677
+    .word   0x11223344
+.p2align 4
 Lprefix:
+_fopen_hook_prefix:
     .quad   0x11223344556677
 )");
 
 extern "C" {
 extern unsigned char fopen_hook_shellcode_beg[];
 extern unsigned char fopen_hook_shellcode_end[];
+extern unsigned char fopen_hook_original_ptr[];
+extern unsigned char fopen_hook_prefix[];
 }
 
 struct PayloadWadVerify {
     unsigned char return_true[0x8] = {
         0x20, 0x00, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6,
     };
-    PtrStorage fopen_hook_ptr{};
 };
 
-struct PayloadImportStub {
-    std::uint32_t adrp;
-    std::uint32_t ldr;
-    std::uint32_t br;
-
-    static PayloadImportStub create(std::uint64_t from, std::uint64_t to) {
-        const auto page_diff =
-            static_cast<std::int64_t>((to & ~0xFFFULL) - (from & ~0xFFFULL)) >> 12;
-        if (page_diff < -0x100000 || page_diff > 0xFFFFF) {
-            throw std::runtime_error("fopen import stub offset is out of ARM64 range");
-        }
-        const auto imm21 = static_cast<std::uint32_t>(page_diff) & 0x1FFFFF;
-        const auto immlo = (imm21 & 0x3) << 29;
-        const auto immhi = ((imm21 >> 2) & 0x7FFFF) << 5;
-        return {
-            static_cast<std::uint32_t>(0x90000010 | immhi | immlo),
-            static_cast<std::uint32_t>(0xF9400210 | (((to & 0xFFF) >> 3) << 10)),
-            0xD61F0200,
-        };
-    }
+struct PayloadFopenHook {
+    unsigned char fopen_hook[0x100]{};
+    PtrStorage fopen_org_ptr{};
+    std::uint8_t padding[0x8]{};
+    char prefix[0x100]{};
 };
+
+static_assert(offsetof(PayloadFopenHook, fopen_org_ptr) == 0x100);
+static_assert(offsetof(PayloadFopenHook, prefix) == 0x110);
 
 std::uint64_t find_unique_wad_verify(const std::uint8_t* begin, const std::uint8_t* end,
                                      std::uint64_t text_address) {
@@ -373,7 +437,8 @@ std::uint64_t find_unique_wad_verify(const std::uint8_t* begin, const std::uint8
 struct ScanResult {
     std::uint64_t wad_verify{};
     std::uint64_t fopen_ptr{};
-    std::uint64_t fopen_stub{};
+    std::uint64_t image_begin{};
+    std::uint64_t image_end{};
 };
 
 ScanResult scan_executable(const std::filesystem::path& executable) {
@@ -407,15 +472,43 @@ ScanResult scan_executable(const std::filesystem::path& executable) {
     if (result.fopen_ptr == 0) {
         throw std::runtime_error("Failed to find fopen import pointer");
     }
-    result.fopen_stub = macho.find_stub_refs(result.fopen_ptr);
-    if (result.fopen_stub == 0) {
+    if (macho.find_stub_refs(result.fopen_ptr) == 0) {
         throw std::runtime_error("Failed to find fopen import stub");
     }
+    std::tie(result.image_begin, result.image_end) = macho.image_vm_range();
     return result;
+}
+
+void wait_for_fopen_resolution(Process& process, const ScanResult& scan) {
+    const auto slide = process.base();
+    const auto image_begin = slide + scan.image_begin;
+    const auto image_end = slide + scan.image_end;
+    const auto fopen_ptr = slide + scan.fopen_ptr;
+    const auto deadline = std::chrono::steady_clock::now() + IMPORT_RESOLUTION_TIMEOUT;
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (process.exited()) {
+            throw std::runtime_error("League exited before the fopen import was resolved");
+        }
+
+        PtrStorage target = 0;
+        process.read(reinterpret_cast<const void*>(fopen_ptr), &target, sizeof(target));
+        if (target != 0 && (target < image_begin || target >= image_end)) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    throw std::runtime_error(
+        "Timed out waiting for dyld to resolve the League fopen import");
 }
 
 void patch_process(Process& process, const ScanResult& scan,
                    const std::filesystem::path& overlay) {
+    wait_for_fopen_resolution(process, scan);
+    const TaskSuspension suspension(process);
+    process.verify_arm64();
+
     auto prefix = canonical_path(overlay).generic_string();
     if (!prefix.ends_with('/')) {
         prefix.push_back('/');
@@ -427,36 +520,44 @@ void patch_process(Process& process, const ScanResult& scan,
         static_cast<std::ptrdiff_t>(sizeof(PayloadFopenHook::fopen_hook))) {
         throw std::runtime_error("ARM64 fopen hook payload has an unexpected size");
     }
+    if (fopen_hook_original_ptr - fopen_hook_shellcode_beg !=
+            static_cast<std::ptrdiff_t>(offsetof(PayloadFopenHook, fopen_org_ptr)) ||
+        fopen_hook_prefix - fopen_hook_shellcode_beg !=
+            static_cast<std::ptrdiff_t>(offsetof(PayloadFopenHook, prefix))) {
+        throw std::runtime_error("ARM64 fopen hook data layout does not match its payload");
+    }
+    std::uint32_t hook_landing_instruction = 0;
+    std::memcpy(&hook_landing_instruction, fopen_hook_shellcode_beg,
+                sizeof(hook_landing_instruction));
+    if (hook_landing_instruction != BTI_C) {
+        throw std::runtime_error("ARM64 fopen hook is missing its BTI landing instruction");
+    }
 
     const auto fopen_hook = process.allocate(sizeof(PayloadFopenHook));
     const auto wad_verify = reinterpret_cast<void*>(process.base() + scan.wad_verify);
     const auto fopen_ptr = process.base() + scan.fopen_ptr;
-    const auto fopen_stub = reinterpret_cast<void*>(process.base() + scan.fopen_stub);
+    PtrStorage fopen_org = 0;
+    process.read(reinterpret_cast<const void*>(fopen_ptr), &fopen_org, sizeof(fopen_org));
 
     PayloadFopenHook fopen_payload{};
-    fopen_payload.fopen_org_ptr = fopen_ptr;
+    fopen_payload.fopen_org_ptr = fopen_org;
     std::memcpy(fopen_payload.fopen_hook, fopen_hook_shellcode_beg,
                 sizeof(fopen_payload.fopen_hook));
     std::memcpy(fopen_payload.prefix, prefix.c_str(), prefix.size() + 1);
 
     PayloadWadVerify verify_payload{};
-    verify_payload.fopen_hook_ptr = reinterpret_cast<PtrStorage>(fopen_hook);
-    const auto verify_hook_slot =
-        reinterpret_cast<PtrStorage>(wad_verify) + offsetof(PayloadWadVerify, fopen_hook_ptr);
-    const auto stub_payload = PayloadImportStub::create(
-        reinterpret_cast<PtrStorage>(fopen_stub), verify_hook_slot);
+    const auto fopen_hook_ptr = reinterpret_cast<PtrStorage>(fopen_hook);
 
     process.writable(fopen_hook, sizeof(fopen_payload));
-    process.write(fopen_hook, &fopen_payload, sizeof(fopen_payload));
+    process.write_verified(fopen_hook, &fopen_payload, sizeof(fopen_payload));
     process.executable(fopen_hook, sizeof(fopen_payload));
 
     process.writable(wad_verify, sizeof(verify_payload));
-    process.write(wad_verify, &verify_payload, sizeof(verify_payload));
+    process.write_verified(wad_verify, &verify_payload, sizeof(verify_payload));
     process.executable(wad_verify, sizeof(verify_payload));
 
-    process.writable(fopen_stub, sizeof(stub_payload));
-    process.write(fopen_stub, &stub_payload, sizeof(stub_payload));
-    process.executable(fopen_stub, sizeof(stub_payload));
+    process.write_verified(reinterpret_cast<void*>(fopen_ptr), &fopen_hook_ptr,
+                           sizeof(fopen_hook_ptr));
 }
 
 bool should_stop(void* context, StopCallback callback) {
@@ -544,17 +645,22 @@ extern "C" int ltk_macos_run(const char* overlay, const char* game_executable, v
 
         const auto scan = scan_executable(executable_path);
         emit(context, event_callback, "ready", 0, SIGNATURE_ID);
+        bool waiting_emitted = false;
 
         while (!should_stop(context, stop_callback)) {
             const auto pid = Process::find_pid(executable_path);
             if (pid == 0) {
-                emit(context, event_callback, "waitingForGame");
+                if (!waiting_emitted) {
+                    emit(context, event_callback, "waitingForGame");
+                    waiting_emitted = true;
+                }
                 for (int count = 0; count < 10 && !should_stop(context, stop_callback); ++count) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 continue;
             }
 
+            waiting_emitted = false;
             emit(context, event_callback, "gameFound", pid);
             auto process = Process::open(pid);
             emit(context, event_callback, "scanning", pid, SIGNATURE_ID);

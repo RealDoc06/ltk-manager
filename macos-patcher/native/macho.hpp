@@ -127,6 +127,7 @@ namespace lol {
         std::uint64_t find_import_ptr(char const* func_name) const;
         std::uint64_t find_stub_refs(std::uint64_t address) const;
         std::tuple<std::uint64_t, MachO::data_t, size_t> find_section(std::string_view name) const;
+        std::pair<std::uint64_t, std::uint64_t> image_vm_range() const;
 
     private:
         struct Stream;
@@ -317,6 +318,23 @@ namespace lol {
         parse_data(result.data(), result.size(), cputype);
     }
 
+    inline std::pair<std::uint64_t, std::uint64_t> MachO::image_vm_range() const {
+        if (segments.empty()) {
+            throw std::runtime_error("Mach-O image has no segments");
+        }
+
+        auto begin = segments.front().vmaddr;
+        auto end = begin;
+        for (auto const& segment : segments) {
+            if (segment.vmsize > UINT64_MAX - segment.vmaddr) {
+                throw std::runtime_error("Mach-O segment range overflows");
+            }
+            begin = std::min(begin, segment.vmaddr);
+            end = std::max(end, segment.vmaddr + segment.vmsize);
+        }
+        return {begin, end};
+    }
+
     inline void MachO::read_stubs(const Stream& org_stream, std::uint64_t address) {
         auto stream = org_stream.copy();
         while (!stream.empty()) {
@@ -332,9 +350,9 @@ namespace lol {
                 auto const adrp = stream.read_raw<std::uint32_t>();
                 auto const ldr = stream.read_raw<std::uint32_t>();
                 auto const br = stream.read_raw<std::uint32_t>();
-                if ((adrp & 0x9F000000) != 0x90000000 || (ldr & 0xFF0003FF) != 0xF9000210 ||
-                    (br & 0xFFFFFC1F) != 0xD61F0000) {
-                    // throw error here
+                if ((adrp & 0x9F00001F) != 0x90000010 ||
+                    (ldr & 0xFFC003FF) != 0xF9400210 || br != 0xD61F0200) {
+                    throw std::runtime_error("Unsupported ARM64 import stub");
                 }
 
                 // ADRP: Extract 21-bit signed page offset
