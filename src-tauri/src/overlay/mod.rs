@@ -2,13 +2,29 @@ use crate::error::{AppError, AppResult, Utf8PathExt};
 use crate::mods::{ModLibrary, WadReportState};
 use crate::state::{Settings, WadBlocklistEntry};
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::{
+    collections::{HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{BufWriter, Read, Seek, SeekFrom, Write},
+    path::Path,
+};
 use tauri::{Emitter, Manager};
 
 const SCRIPTS_WAD: &str = "scripts.wad.client";
 const TFT_WAD: &str = "map22.wad.client";
+#[cfg(target_os = "macos")]
+const WAD_V3_SIGNATURE_OFFSET: u64 = 4;
+#[cfg(target_os = "macos")]
+const WAD_V3_SIGNATURE_SIZE: usize = 256;
+#[cfg(target_os = "macos")]
+const WAD_V3_CHECKSUM_OFFSET: u64 = 4 + 256;
 
-const MACOS_PLATFORM_WADS: &[&str] =
-    &["bootstrap.macos.wad.client", "shadercache.metal.wad.client"];
+const MACOS_PLATFORM_WADS: &[&str] = &[
+    "bootstrap.macos.wad.client",
+    "shadercache.metal.wad.client",
+    "shaders.wad.client",
+];
 
 #[derive(Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export)]
@@ -86,7 +102,7 @@ impl ModLibrary {
         let app_handle_clone = self.app_handle().clone();
         let mut builder =
             ltk_overlay::OverlayBuilder::new(utf8_game_dir, utf8_overlay_root, utf8_state_dir)
-                .with_blocked_wads(blocked_wads)
+                .with_blocked_wads(blocked_wads.clone())
                 .with_progress(move |progress| {
                     let stage = match progress.stage {
                         ltk_overlay::OverlayStage::Indexing => OverlayStage::Indexing,
@@ -129,6 +145,9 @@ impl ModLibrary {
         builder
             .build()
             .map_err(|e| AppError::Other(format!("Overlay build failed: {}", e)))?;
+
+        #[cfg(target_os = "macos")]
+        prepare_macos_overlay_wads(&overlay_root, &game_dir, &blocked_wads)?;
 
         // Capture per-mod WAD reports for the library badge UI. Failure to
         // persist must not fail the patch — log and continue.
@@ -182,6 +201,493 @@ impl ModLibrary {
             }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_macos_overlay_wads(
+    overlay_root: &Path,
+    game_dir: &Path,
+    blocked_wads: &[String],
+) -> AppResult<()> {
+    let passthroughs = create_blocked_wad_passthroughs(overlay_root, game_dir, blocked_wads)?;
+    let data_dir = overlay_root.join("DATA");
+    if !data_dir.exists() {
+        return Ok(());
+    }
+
+    let mut restored = 0;
+    let mut repacked = 0;
+    let mut repaired = 0;
+    for entry in walkdir::WalkDir::new(&data_dir).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            AppError::Other(format!("Failed to scan macOS overlay WADs: {}", error))
+        })?;
+        if !entry.file_type().is_file() || entry.file_type().is_symlink() {
+            continue;
+        }
+
+        let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if file_name.ends_with(".wad") || file_name.ends_with(".wad.client") {
+            let source_path = game_dir.join("DATA").join(
+                entry
+                    .path()
+                    .strip_prefix(&data_dir)
+                    .map_err(|error| AppError::Other(error.to_string()))?,
+            );
+            // Revert any cross-WAD overrides that clobbered a subchunk entry in
+            // this WAD with a standalone (non-subchunked) chunk. ltk_overlay's
+            // cross-WAD distribution doesn't account for the same path_hash
+            // being subchunked in one WAD but standalone in another — see the
+            // Aatrox crash root cause. Always run this *before* canonicalize so
+            // canonicalize sees the restored subchunk and treats it correctly.
+            if restore_subchunk_overrides(entry.path(), &source_path)? {
+                restored += 1;
+            }
+            if canonicalize_macos_wad(entry.path(), &source_path)? {
+                repacked += 1;
+            } else if repair_macos_wad_header(entry.path(), &source_path)? {
+                repaired += 1;
+            }
+        }
+    }
+
+    tracing::info!(
+        "Overlay: restored subchunks in {} WAD(s), canonicalized {} macOS WAD(s), repaired headers for {} WAD(s), linked {} blocked WAD passthrough(s)",
+        restored,
+        repacked,
+        repaired,
+        passthroughs
+    );
+    Ok(())
+}
+
+/// Walk the overlay WAD and detect entries whose original (source) WAD has
+/// subchunked metadata (frame_count > 1 or start_frame > 0 on a ZstdMulti
+/// chunk) that the overlay no longer carries — i.e. a cross-WAD mod override
+/// landed on top of a subchunk entry. For those entries, copy the original
+/// chunk bytes from `source_path` into a new overlay WAD that keeps every
+/// other entry untouched. Returns `true` if anything was restored.
+#[cfg(target_os = "macos")]
+fn restore_subchunk_overrides(path: &Path, source_path: &Path) -> AppResult<bool> {
+    use byteorder::{WriteBytesExt as _, LE};
+    use ltk_wad::{WadChunk, WadChunkCompression};
+
+    if !source_path.exists() {
+        return Ok(false);
+    }
+
+    let mut overlay_wad = ltk_wad::Wad::mount(File::open(path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read overlay WAD {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let mut source_wad = ltk_wad::Wad::mount(File::open(source_path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read source WAD {}: {}",
+            source_path.display(),
+            error
+        ))
+    })?;
+
+    let overlay_chunks = overlay_wad.chunks().clone();
+    let source_chunks = source_wad.chunks().clone();
+
+    // Walk overlay chunks; if the source has the same path_hash and it's a
+    // subchunk over there but isn't here, plan to restore.
+    let mut to_restore: HashMap<u64, WadChunk> = HashMap::new();
+    for chunk in &overlay_chunks {
+        let Some(source_chunk) = source_chunks.get(chunk.path_hash) else {
+            continue;
+        };
+        let source_is_subchunk = source_chunk.compression_type == WadChunkCompression::ZstdMulti
+            && (source_chunk.frame_count > 1 || source_chunk.start_frame != 0);
+        if !source_is_subchunk {
+            continue;
+        }
+        let overlay_still_matches = chunk.compression_type == source_chunk.compression_type
+            && chunk.frame_count == source_chunk.frame_count
+            && chunk.start_frame == source_chunk.start_frame
+            && chunk.uncompressed_size == source_chunk.uncompressed_size;
+        if overlay_still_matches {
+            continue;
+        }
+        to_restore.insert(chunk.path_hash, *source_chunk);
+    }
+
+    if to_restore.is_empty() {
+        return Ok(false);
+    }
+
+    tracing::info!(
+        "Overlay: restoring {} subchunk entry/entries in {} from {}",
+        to_restore.len(),
+        path.display(),
+        source_path.display()
+    );
+
+    let mut signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    let mut source = File::open(source_path)?;
+    source.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    source.read_exact(&mut signature)?;
+
+    let temporary_path = path.with_extension("ltk-restore-tmp");
+    let result = (|| -> AppResult<()> {
+        let mut writer = BufWriter::new(File::create(&temporary_path)?);
+        let version = [b'R', b'W', 3, 4];
+        writer.write_all(&version)?;
+        writer.write_all(&signature)?;
+        writer.write_u64::<LE>(0)?;
+        writer.write_u32::<LE>(overlay_chunks.len() as u32)?;
+        let toc_offset = writer.stream_position()?;
+        writer.write_all(&vec![0_u8; overlay_chunks.len() * 32])?;
+
+        let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(overlay_chunks.len());
+        for chunk in &overlay_chunks {
+            let final_chunk = if let Some(source_chunk) = to_restore.get(&chunk.path_hash) {
+                // Copy bytes straight from the source WAD using the source
+                // chunk's compressed_size/data_offset; rewrite the TOC entry
+                // with the source's subchunk metadata.
+                let raw = source_wad.load_chunk_raw(source_chunk).map_err(|error| {
+                    AppError::Other(format!(
+                        "Failed to read source chunk {:016x} from {}: {}",
+                        chunk.path_hash,
+                        source_path.display(),
+                        error
+                    ))
+                })?;
+                let data_offset = writer.stream_position()? as usize;
+                writer.write_all(&raw)?;
+                WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset,
+                    compressed_size: raw.len(),
+                    uncompressed_size: source_chunk.uncompressed_size,
+                    compression_type: source_chunk.compression_type,
+                    is_duplicated: false,
+                    frame_count: source_chunk.frame_count,
+                    start_frame: source_chunk.start_frame,
+                    checksum: source_chunk.checksum,
+                }
+            } else {
+                let raw = overlay_wad.load_chunk_raw(chunk).map_err(|error| {
+                    AppError::Other(format!(
+                        "Failed to read overlay chunk {:016x} from {}: {}",
+                        chunk.path_hash,
+                        path.display(),
+                        error
+                    ))
+                })?;
+                let data_offset = writer.stream_position()? as usize;
+                writer.write_all(&raw)?;
+                WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset,
+                    compressed_size: raw.len(),
+                    ..*chunk
+                }
+            };
+            final_chunks.push(final_chunk);
+        }
+
+        writer.seek(SeekFrom::Start(toc_offset))?;
+        for chunk in &final_chunks {
+            chunk.write_v3_4(&mut writer).map_err(|error| {
+                AppError::Other(format!(
+                    "Failed to write chunk table for {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+        }
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&temporary_path, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result?;
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn create_blocked_wad_passthroughs(
+    overlay_root: &Path,
+    game_dir: &Path,
+    blocked_wads: &[String],
+) -> AppResult<usize> {
+    let blocked: HashSet<String> = blocked_wads
+        .iter()
+        .map(|wad| wad.to_ascii_lowercase())
+        .collect();
+    if blocked.is_empty() {
+        return Ok(0);
+    }
+
+    let game_data_dir = game_dir.join("DATA");
+    let overlay_data_dir = overlay_root.join("DATA");
+    if !game_data_dir.exists() {
+        return Ok(0);
+    }
+
+    let mut linked = 0;
+    for entry in walkdir::WalkDir::new(&game_data_dir).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            AppError::Other(format!("Failed to scan blocked macOS WADs: {}", error))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if !blocked.contains(&file_name) {
+            continue;
+        }
+
+        let relative_path = entry
+            .path()
+            .strip_prefix(&game_data_dir)
+            .map_err(|error| AppError::Other(error.to_string()))?;
+        let target_path = overlay_data_dir.join(relative_path);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let replace = match fs::read_link(&target_path) {
+            Ok(existing) => existing != entry.path(),
+            Err(_) => target_path.exists(),
+        };
+        if replace {
+            if target_path.is_dir() {
+                fs::remove_dir_all(&target_path)?;
+            } else {
+                fs::remove_file(&target_path)?;
+            }
+        }
+        if replace || !target_path.exists() {
+            std::os::unix::fs::symlink(entry.path(), &target_path)?;
+            linked += 1;
+        }
+    }
+
+    Ok(linked)
+}
+
+#[cfg(target_os = "macos")]
+fn canonicalize_macos_wad(path: &Path, source_path: &Path) -> AppResult<bool> {
+    use byteorder::{WriteBytesExt as _, LE};
+    use ltk_wad::{WadChunk, WadChunkCompression};
+    use xxhash_rust::xxh3::{xxh3_64, Xxh3};
+
+    let mut wad = ltk_wad::Wad::mount(File::open(path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read overlay WAD {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let chunks = wad.chunks().clone();
+    let mut seen_checksums = HashMap::new();
+    let needs_repack = chunks.iter().any(|chunk| {
+        chunk.compression_type == WadChunkCompression::ZstdMulti
+            || seen_checksums
+                .insert(chunk.checksum, chunk.data_offset)
+                .is_some_and(|offset| offset != chunk.data_offset)
+    });
+    if !needs_repack {
+        return Ok(false);
+    }
+
+    let mut signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    let mut source = File::open(source_path)?;
+    source.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    source.read_exact(&mut signature)?;
+
+    let temporary_path = path.with_extension("ltk-tmp");
+    let result = (|| -> AppResult<()> {
+        let mut writer = BufWriter::new(File::create(&temporary_path)?);
+        let version = [b'R', b'W', 3, 4];
+        writer.write_all(&version)?;
+        writer.write_all(&signature)?;
+        writer.write_u64::<LE>(0)?;
+        writer.write_u32::<LE>(chunks.len() as u32)?;
+        let toc_offset = writer.stream_position()?;
+        writer.write_all(&vec![0_u8; chunks.len() * 32])?;
+
+        let mut locations = HashMap::<u64, WadChunk>::new();
+        let mut final_chunks = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            // A ZstdMulti chunk with frame_count > 1 or a non-zero start_frame is
+            // a *subchunk* inside a shared multi-frame zstd stream — multiple TOC
+            // entries point at the same compressed bytes but each reads a
+            // different frame range. Decompressing and re-encoding as Zstd here
+            // (the original codex path) collapses every subchunk to the data of
+            // frame 0, which is exactly what crashed Aatrox/Vayne: their WADs
+            // ship hundreds of these (audio, scripts, vfx). Pass these through
+            // raw and let the dedup below merge identical streams while
+            // preserving each entry's own subchunk metadata.
+            let is_subchunked = chunk.compression_type == WadChunkCompression::ZstdMulti
+                && (chunk.frame_count > 1 || chunk.start_frame != 0);
+            let (raw, compression_type, uncompressed_size, frame_count, start_frame, checksum) =
+                if chunk.compression_type == WadChunkCompression::ZstdMulti && !is_subchunked {
+                    let decompressed = wad.load_chunk_decompressed(chunk).map_err(|error| {
+                        AppError::Other(format!(
+                            "Failed to decompress multi-frame chunk {:016x} in {}: {}",
+                            chunk.path_hash,
+                            path.display(),
+                            error
+                        ))
+                    })?;
+                    let compressed = zstd::stream::encode_all(&decompressed[..], 3)?;
+                    let checksum = xxh3_64(&compressed);
+                    (
+                        compressed,
+                        WadChunkCompression::Zstd,
+                        decompressed.len(),
+                        0,
+                        0,
+                        checksum,
+                    )
+                } else {
+                    (
+                        wad.load_chunk_raw(chunk)
+                            .map_err(|error| {
+                                AppError::Other(format!(
+                                    "Failed to read chunk {:016x} in {}: {}",
+                                    chunk.path_hash,
+                                    path.display(),
+                                    error
+                                ))
+                            })?
+                            .into_vec(),
+                        chunk.compression_type,
+                        chunk.uncompressed_size,
+                        chunk.frame_count,
+                        chunk.start_frame,
+                        chunk.checksum,
+                    )
+                };
+
+            let final_chunk = if let Some(existing) = locations.get(&checksum) {
+                // Share the same on-disk bytes with an earlier entry, but keep
+                // *this* chunk's subchunk metadata (frame_count, start_frame,
+                // uncompressed_size). Without this, subchunks all collapse to
+                // the first entry's frame and the game reads the wrong slice.
+                WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset: existing.data_offset,
+                    compressed_size: existing.compressed_size,
+                    uncompressed_size,
+                    compression_type,
+                    is_duplicated: false,
+                    frame_count,
+                    start_frame,
+                    checksum: existing.checksum,
+                }
+            } else {
+                let data_offset = writer.stream_position()? as usize;
+                writer.write_all(&raw)?;
+                let final_chunk = WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset,
+                    compressed_size: raw.len(),
+                    uncompressed_size,
+                    compression_type,
+                    is_duplicated: false,
+                    frame_count,
+                    start_frame,
+                    checksum,
+                };
+                locations.insert(checksum, final_chunk);
+                final_chunk
+            };
+            final_chunks.push(final_chunk);
+        }
+
+        writer.seek(SeekFrom::Start(toc_offset))?;
+        for chunk in &final_chunks {
+            chunk.write_v3_4(&mut writer).map_err(|error| {
+                AppError::Other(format!(
+                    "Failed to write chunk table for {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+        }
+
+        let mut hasher = Xxh3::new();
+        hasher.update(&version);
+        for chunk in &final_chunks {
+            hasher.update(&chunk.path_hash.to_le_bytes());
+            hasher.update(&chunk.checksum.to_le_bytes());
+        }
+        writer.seek(SeekFrom::Start(WAD_V3_CHECKSUM_OFFSET))?;
+        writer.write_u64::<LE>(hasher.digest())?;
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&temporary_path, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result?;
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn repair_macos_wad_header(path: &Path, source_path: &Path) -> AppResult<bool> {
+    use byteorder::{ReadBytesExt as _, WriteBytesExt as _, LE};
+    use xxhash_rust::xxh3::Xxh3;
+
+    let mut version = [0_u8; 4];
+    File::open(path)?.read_exact(&mut version)?;
+    if version[0..2] != [b'R', b'W'] || version[2] != 3 {
+        return Ok(false);
+    }
+
+    let wad = ltk_wad::Wad::mount(File::open(path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read overlay WAD {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let mut hasher = Xxh3::new();
+    hasher.update(&version);
+    for chunk in wad.chunks() {
+        hasher.update(&chunk.path_hash.to_le_bytes());
+        hasher.update(&chunk.checksum.to_le_bytes());
+    }
+    let checksum = hasher.digest();
+
+    let mut signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    let mut source = File::open(source_path)?;
+    source.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    source.read_exact(&mut signature)?;
+
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    file.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    let mut current_signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    file.read_exact(&mut current_signature)?;
+    file.seek(SeekFrom::Start(WAD_V3_CHECKSUM_OFFSET))?;
+    let current_checksum = file.read_u64::<LE>()?;
+    if current_signature == signature && current_checksum == checksum {
+        return Ok(false);
+    }
+
+    if current_signature != signature {
+        file.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+        file.write_all(&signature)?;
+    }
+    file.seek(SeekFrom::Start(WAD_V3_CHECKSUM_OFFSET))?;
+    file.write_u64::<LE>(checksum)?;
+    Ok(true)
 }
 
 /// Resolve the user's blocklist settings into a concrete, deduped list of WAD
@@ -242,6 +748,106 @@ pub(crate) fn resolve_blocked_wads(settings: &Settings, available_wads: &[String
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_wad_header_matches_reference_algorithm() {
+        use byteorder::{ReadBytesExt as _, LE};
+        use ltk_wad::{WadBuilder, WadChunkBuilder};
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let wad_path = temp.path().join("Vayne.wad.client");
+        let source_path = temp.path().join("Vayne.original.wad.client");
+        let builder = WadBuilder::default()
+            .with_chunk(WadChunkBuilder::default().with_hash(20))
+            .with_chunk(WadChunkBuilder::default().with_hash(10));
+        let mut output = File::create(&wad_path).unwrap();
+        builder
+            .build_to_writer(&mut output, |path_hash, cursor| {
+                cursor.write_all(&path_hash.to_le_bytes())?;
+                Ok(())
+            })
+            .unwrap();
+        drop(output);
+
+        std::fs::copy(&wad_path, &source_path).unwrap();
+        let expected_signature = [0xA5_u8; WAD_V3_SIGNATURE_SIZE];
+        let mut source = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&source_path)
+            .unwrap();
+        source
+            .seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))
+            .unwrap();
+        source.write_all(&expected_signature).unwrap();
+
+        assert!(repair_macos_wad_header(&wad_path, &source_path).unwrap());
+        assert!(!repair_macos_wad_header(&wad_path, &source_path).unwrap());
+
+        let wad = ltk_wad::Wad::mount(File::open(&wad_path).unwrap()).unwrap();
+        let mut checksum_input = vec![b'R', b'W', 3, 4];
+        for chunk in wad.chunks() {
+            checksum_input.extend_from_slice(&chunk.path_hash.to_le_bytes());
+            checksum_input.extend_from_slice(&chunk.checksum.to_le_bytes());
+        }
+        let expected = xxhash_rust::xxh3::xxh3_64(&checksum_input);
+
+        let mut file = File::open(&wad_path).unwrap();
+        file.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET)).unwrap();
+        let mut actual_signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+        file.read_exact(&mut actual_signature).unwrap();
+        assert_eq!(actual_signature, expected_signature);
+        file.seek(SeekFrom::Start(WAD_V3_CHECKSUM_OFFSET)).unwrap();
+        assert_eq!(file.read_u64::<LE>().unwrap(), expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_wad_canonicalization_converts_multiframe_and_deduplicates() {
+        use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let wad_path = temp.path().join("Aatrox.wad.client");
+        let source_path = temp.path().join("Aatrox.original.wad.client");
+        let builder = WadBuilder::default()
+            .with_chunk(WadChunkBuilder::default().with_hash(10))
+            .with_chunk(WadChunkBuilder::default().with_hash(20));
+        let mut output = File::create(&wad_path).unwrap();
+        builder
+            .build_to_writer(&mut output, |_path_hash, cursor| {
+                cursor.write_all(b"shared chunk data")?;
+                Ok(())
+            })
+            .unwrap();
+        drop(output);
+        std::fs::copy(&wad_path, &source_path).unwrap();
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&wad_path)
+            .unwrap();
+        for index in 0..2 {
+            file.seek(SeekFrom::Start(272 + index * 32 + 20)).unwrap();
+            file.write_all(&[0x14]).unwrap();
+        }
+        drop(file);
+
+        assert!(canonicalize_macos_wad(&wad_path, &source_path).unwrap());
+        assert!(!canonicalize_macos_wad(&wad_path, &source_path).unwrap());
+
+        let wad = ltk_wad::Wad::mount(File::open(&wad_path).unwrap()).unwrap();
+        let chunks = wad.chunks().as_slice();
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.compression_type == WadChunkCompression::Zstd));
+        assert_eq!(chunks[0].data_offset, chunks[1].data_offset);
+        assert_eq!(chunks[0].checksum, chunks[1].checksum);
+    }
+
     #[test]
     fn resolve_blocked_wads_exact_lowercased_and_scripts_added_by_default() {
         let settings = Settings {
@@ -267,6 +873,7 @@ mod tests {
         let result = resolve_blocked_wads(&settings, &[]);
         assert!(result.contains(&"bootstrap.macos.wad.client".to_string()));
         assert!(result.contains(&"shadercache.metal.wad.client".to_string()));
+        assert!(result.contains(&"shaders.wad.client".to_string()));
     }
 
     #[test]
