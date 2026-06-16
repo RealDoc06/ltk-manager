@@ -82,3 +82,8 @@ export function useHasActiveFilters() {
       s.showOnlyEnabled,
   );
 }
+
+/** Reordering only applies in priority sort; any other sort imposes its own order. */
+export function useReorderDisabled() {
+  return useLibraryFilterStore((s) => s.sort.field !== "priority");
+}
