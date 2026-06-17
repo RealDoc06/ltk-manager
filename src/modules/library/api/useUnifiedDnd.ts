@@ -14,6 +14,7 @@ import {
   REMOVE_FROM_FOLDER_ID,
   resolveFolderId,
 } from "@/modules/library/utils";
+import { useReorderDisabled } from "@/stores";
 
 import { useFolderDnd } from "./useFolderDnd";
 import { useMoveModToFolder, useReorderFolderMods } from "./useMoveMod";
@@ -24,16 +25,10 @@ interface UseUnifiedDndArgs {
   rootMods: InstalledMod[];
   modsByFolder: Map<string, InstalledMod[]>;
   onReorder: (modIds: string[]) => void;
-  reorderDisabled: boolean;
 }
 
-export function useUnifiedDnd({
-  folders,
-  rootMods,
-  modsByFolder,
-  onReorder,
-  reorderDisabled,
-}: UseUnifiedDndArgs) {
+export function useUnifiedDnd({ folders, rootMods, modsByFolder, onReorder }: UseUnifiedDndArgs) {
+  const reorderDisabled = useReorderDisabled();
   const {
     localOrder: modLocalOrder,
     orderedRootMods,
@@ -42,7 +37,7 @@ export function useUnifiedDnd({
     handleDragOver: handleModDragOver,
     handleDragEnd: handleModDragEnd,
     handleDragCancel: handleModDragCancel,
-  } = useRootModDnd({ rootMods, onReorder, reorderDisabled });
+  } = useRootModDnd({ rootMods, onReorder });
 
   const {
     folderLocalOrder,

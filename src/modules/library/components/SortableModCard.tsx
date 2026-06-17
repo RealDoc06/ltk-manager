@@ -4,13 +4,13 @@ import type { CSSProperties } from "react";
 
 import type { InstalledMod } from "@/lib/tauri";
 import { usePatcherStatus } from "@/modules/patcher";
+import { useReorderDisabled } from "@/stores";
 
 import { ModCard } from "./ModCard";
 
 interface SortableModCardProps {
   mod: InstalledMod;
   viewMode: "grid" | "list";
-  reorderDisabled?: boolean;
   onViewDetails?: (mod: InstalledMod) => void;
   onEditMetadata?: (mod: InstalledMod) => void;
 }
@@ -18,10 +18,10 @@ interface SortableModCardProps {
 export function SortableModCard({
   mod,
   viewMode,
-  reorderDisabled,
   onViewDetails,
   onEditMetadata,
 }: SortableModCardProps) {
+  const reorderDisabled = useReorderDisabled();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: mod.id,
     disabled: reorderDisabled ? { droppable: true } : false,

@@ -4,16 +4,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InstalledMod } from "@/lib/tauri";
 import { hasOrderChanged, resolveFolderId } from "@/modules/library/utils";
+import { useReorderDisabled } from "@/stores";
 
 import { useMoveModToFolder } from "./useMoveMod";
 
 interface UseRootModDndArgs {
   rootMods: InstalledMod[];
   onReorder: (modIds: string[]) => void;
-  reorderDisabled: boolean;
 }
 
-export function useRootModDnd({ rootMods, onReorder, reorderDisabled }: UseRootModDndArgs) {
+export function useRootModDnd({ rootMods, onReorder }: UseRootModDndArgs) {
+  const reorderDisabled = useReorderDisabled();
   const moveModToFolder = useMoveModToFolder();
 
   const rootModIds = useMemo(() => rootMods.map((m) => m.id), [rootMods]);

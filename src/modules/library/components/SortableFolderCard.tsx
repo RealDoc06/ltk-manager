@@ -3,6 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { CSSProperties } from "react";
 
 import type { InstalledMod, LibraryFolder } from "@/lib/tauri";
+import { useReorderDisabled } from "@/stores";
 
 import { FolderCard } from "./FolderCard";
 
@@ -19,8 +20,10 @@ export function SortableFolderCard({
   mods,
   sortDisabled,
 }: SortableFolderCardProps) {
+  const reorderDisabled = useReorderDisabled();
+  const disabled = sortDisabled || reorderDisabled;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
-    useSortable({ id: sortableId, disabled: sortDisabled ? { draggable: true } : false });
+    useSortable({ id: sortableId, disabled: disabled ? { draggable: true } : false });
 
   const style: CSSProperties = {
     transform: CSS.Translate.toString(transform),

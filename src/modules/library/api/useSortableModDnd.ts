@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InstalledMod } from "@/lib/tauri";
 import { REMOVE_FROM_FOLDER_ID } from "@/modules/library/utils";
+import { useReorderDisabled } from "@/stores";
 
 import { useMoveModToFolder } from "./useMoveMod";
 
@@ -13,15 +14,10 @@ interface UseSortableModDndArgs {
   mods: InstalledMod[];
   onReorder: (modIds: string[]) => void;
   folderId?: string;
-  reorderDisabled?: boolean;
 }
 
-export function useSortableModDnd({
-  mods,
-  onReorder,
-  folderId,
-  reorderDisabled,
-}: UseSortableModDndArgs) {
+export function useSortableModDnd({ mods, onReorder, folderId }: UseSortableModDndArgs) {
+  const reorderDisabled = useReorderDisabled();
   const moveModToFolder = useMoveModToFolder();
 
   const propsOrder = useMemo(() => mods.map((m) => m.id), [mods]);
