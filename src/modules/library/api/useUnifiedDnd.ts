@@ -214,6 +214,7 @@ export function useUnifiedDnd({ folders, rootMods, modsByFolder, onReorder }: Us
           const mod = folderModLookup.get(c.id as string);
           return mod && mod.folderId === activeSourceFolderId;
         });
+        if (siblingsOnly.length === 0) return [];
         return closestCenter({ ...args, droppableContainers: siblingsOnly });
       }
 
@@ -238,7 +239,10 @@ export function useUnifiedDnd({ folders, rootMods, modsByFolder, onReorder }: Us
       );
       if (folderHit) return [folderHit];
 
-      const rootModsOnly = withoutFolderMods.filter((c) => !parseSortableFolderId(c.id as string));
+      const rootModsOnly = withoutFolderMods.filter(
+        (c) => !parseSortableFolderId(c.id as string) && c.id !== REMOVE_FROM_FOLDER_ID,
+      );
+      if (rootModsOnly.length === 0) return [];
       return closestCenter({ ...args, droppableContainers: rootModsOnly });
     },
     [folderModLookup, reorderDisabled],

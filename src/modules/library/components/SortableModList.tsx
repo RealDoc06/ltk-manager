@@ -33,7 +33,10 @@ const removeZoneFirstCollision: CollisionDetection = (args) => {
   const pointerCollisions = pointerWithin(args);
   const removeHit = pointerCollisions.find((c) => c.id === REMOVE_FROM_FOLDER_ID);
   if (removeHit) return [removeHit];
-  return closestCenter(args);
+
+  const withoutRemoveZone = args.droppableContainers.filter((c) => c.id !== REMOVE_FROM_FOLDER_ID);
+  if (withoutRemoveZone.length === 0) return [];
+  return closestCenter({ ...args, droppableContainers: withoutRemoveZone });
 };
 
 interface SortableModListProps {
