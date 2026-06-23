@@ -42,13 +42,22 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // Persisting visibility state breaks the start-in-tray option
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
         .manage(logging_guards)
         .setup(setup::run)
         .invoke_handler(tauri::generate_handler![
             // App
             commands::get_app_info,
             commands::get_platform_support,
+            commands::show_main_window,
             // Settings
             commands::get_settings,
             commands::save_settings,

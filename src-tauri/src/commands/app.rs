@@ -1,5 +1,7 @@
-use crate::error::IpcResult;
+use crate::error::{AppResult, IpcResult, MutexResultExt};
+use crate::state::SettingsState;
 use serde::Serialize;
+use tauri::{AppHandle, Manager, State};
 use ts_rs::TS;
 
 #[derive(Debug, Serialize, TS)]
@@ -26,4 +28,33 @@ pub fn get_app_info() -> IpcResult<AppInfo> {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     })
+}
+
+/// Reveal the main window once the frontend has finished its initial render.
+///
+/// The window is created hidden (`visible: false` in `tauri.conf.json`) to avoid a
+/// white flash while the WebView loads. The frontend calls this after it mounts.
+/// When the user has opted to start in the tray, the window stays hidden — the tray
+/// icon (or an available update, handled in the UI) reveals it later.
+#[tauri::command]
+pub fn show_main_window(app: AppHandle, settings: State<SettingsState>) -> IpcResult<()> {
+    show_main_window_inner(&app, &settings).into()
+}
+
+fn show_main_window_inner(app: &AppHandle, settings: &State<SettingsState>) -> AppResult<()> {
+    let start_hidden = {
+        let settings = settings.0.lock().mutex_err()?;
+        settings.start_in_tray || settings.start_in_tray_unless_update
+    };
+
+    if start_hidden {
+        return Ok(());
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+
+    Ok(())
 }
