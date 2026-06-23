@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   AlertCircle,
   ChevronRight,
@@ -24,6 +25,10 @@ import {
 } from "@/modules/settings/hooks";
 
 type Mode = "exact" | "regex";
+
+/** Fixed suggestion row height (px) so the virtualizer can precompute positions
+ * without per-row measurement. */
+const SUGGESTION_ROW_HEIGHT = 32;
 
 interface WadBlocklistEditorProps {
   settings: Settings;
@@ -262,22 +267,13 @@ function ExactAddRow({
             autoComplete="off"
           />
           {open && suggestions.length > 0 && (
-            <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl">
-              {suggestions.map((wad) => (
-                <button
-                  type="button"
-                  key={wad}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    onDraftChange(wad);
-                    setOpen(false);
-                  }}
-                  className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-sm text-surface-200 hover:bg-surface-600"
-                >
-                  {wad}
-                </button>
-              ))}
-            </div>
+            <WadSuggestionList
+              suggestions={suggestions}
+              onSelect={(wad) => {
+                onDraftChange(wad);
+                setOpen(false);
+              }}
+            />
           )}
         </div>
         <Button variant="ghost" size="sm" onClick={onSubmit} disabled={!draft.trim()}>
@@ -294,6 +290,59 @@ function ExactAddRow({
       {noWadsAvailable && (
         <p className="text-xs text-surface-500">No WAD files were found under DATA.</p>
       )}
+    </div>
+  );
+}
+
+function WadSuggestionList({
+  suggestions,
+  onSelect,
+}: {
+  suggestions: string[];
+  onSelect: (wad: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: suggestions.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => SUGGESTION_ROW_HEIGHT,
+    overscan: 10,
+    getItemKey: (index) => suggestions[index]!,
+  });
+
+  return (
+    <div
+      ref={scrollRef}
+      className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl"
+    >
+      <div
+        role="presentation"
+        className="relative w-full"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const wad = suggestions[virtualRow.index]!;
+          return (
+            <button
+              type="button"
+              key={virtualRow.key}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelect(wad);
+              }}
+              className="absolute inset-x-0 flex cursor-pointer items-center px-3 text-left text-sm text-surface-200 hover:bg-surface-600"
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              title={wad}
+            >
+              <span className="min-w-0 truncate">{wad}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
