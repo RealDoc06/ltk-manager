@@ -8,7 +8,6 @@ mod deep_link;
 mod diagnostics;
 mod error;
 mod hotkeys;
-mod legacy_patcher;
 #[cfg(debug_assertions)]
 mod log_layer;
 mod logging;
@@ -56,6 +55,7 @@ fn main() {
             commands::auto_detect_league_path,
             commands::validate_league_path,
             commands::check_setup_required,
+            commands::detect_league_run_as_admin,
             commands::list_available_wads,
             // Mods
             commands::get_installed_mods,

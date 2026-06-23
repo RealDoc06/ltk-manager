@@ -7,13 +7,13 @@
 
 use crate::diagnostics::{run_all, CheckCtx, DiagnosticReport};
 use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
-use crate::legacy_patcher::api::PATCHER_DLL_NAME;
+use crate::patcher::api::PATCHER_DLL_NAME;
 use crate::state::{get_app_data_dir, SettingsState};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
-/// Same lookup chain as `commands::patcher::resolve_patcher_dll_path`, but
-/// returns `None` instead of an error so we can still report the rest of the
+/// Same lookup chain as `commands::patcher::resolve_resource`, but returns
+/// `None` instead of an error so we can still report the rest of the
 /// diagnostics when the DLL is missing.
 fn resolve_patcher_dll(app_handle: &AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = app_handle.path().resource_dir() {

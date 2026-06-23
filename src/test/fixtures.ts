@@ -28,6 +28,7 @@ export function createMockSettings(overrides?: Partial<Settings>): Settings {
     startInTrayUnlessUpdate: false,
     alwaysStartPatcher: false,
     hasSeenHddWarning: false,
+    elevateInjector: false,
     ...overrides,
   };
 }

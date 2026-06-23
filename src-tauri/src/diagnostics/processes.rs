@@ -45,8 +45,9 @@ pub fn check_manager_not_admin() -> Check {
     )
 }
 
+/// Whether the current (manager) process is running with an elevated token.
 #[cfg(target_os = "windows")]
-fn is_running_as_admin() -> bool {
+pub(crate) fn is_running_as_admin() -> bool {
     use std::mem::size_of;
     use std::ptr;
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -85,7 +86,7 @@ fn is_running_as_admin() -> bool {
 /// for every user who ran diagnostics mid-session, while none of the other
 /// checks actually require League to be closed. Kept here so the phase-2
 /// Vanguard handle-correlation work can call it and present a more specific
-/// signal ("vgc.exe holds a handle on cslol-dll.dll") instead.
+/// signal ("vgc.exe holds a handle on the patcher DLL") instead.
 #[cfg(target_os = "windows")]
 #[allow(dead_code)]
 pub fn check_league_not_running() -> Check {

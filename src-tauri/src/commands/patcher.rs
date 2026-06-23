@@ -1,9 +1,7 @@
 use crate::error::{AppError, AppErrorResponse, AppResult, IpcResult, MutexResultExt};
-use crate::legacy_patcher::api::PATCHER_DLL_NAME;
-use crate::legacy_patcher::runner::{
-    run_legacy_patcher_loop, LegacyPatcherLoopError, DEFAULT_HOOK_TIMEOUT_MS,
-};
 use crate::mods::ModLibraryState;
+use crate::patcher::host::{HostConfig, HostLogLevel};
+use crate::patcher::injector::{Injector, INJECTOR_EXE_NAME};
 use crate::patcher::{PatcherPhase, PatcherState, StoredPatcherConfig};
 use crate::state::SettingsState;
 use serde::{Deserialize, Serialize};
@@ -19,15 +17,7 @@ use ts_rs::TS;
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PatcherConfig {
-    /// Optional log file path.
-    #[ts(optional)]
-    pub log_file: Option<String>,
-    /// Timeout in milliseconds for hook initialization. Defaults to 5 minutes.
-    #[ts(optional)]
-    pub timeout_ms: Option<u32>,
-    /// Optional legacy patcher flags (matches `cslol_set_flags`).
-    ///
-    /// If not provided, defaults to 0 (equivalent to `--opts:none` in cslol-tools).
+    /// Optional hook flags bitmask forwarded to the injection host
     #[ts(optional, type = "number")]
     pub flags: Option<u64>,
     /// Absolute paths to workshop project directories to include in the overlay.
@@ -51,17 +41,20 @@ pub struct PatcherStatus {
     pub phase: PatcherPhase,
 }
 
-/// Resolve the path to the patcher DLL from bundled resources.
-fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
+/// Resolve a bundled resource file (e.g. the injector executable) from the
+/// app's resource directory, falling back to next-to-executable and the crate's
+/// checked-in `resources/` folder for `tauri dev`.
+fn resolve_resource(app_handle: &AppHandle, file_name: &str) -> AppResult<PathBuf> {
     let resource_path = app_handle
         .path()
         .resource_dir()
         .map_err(|e| AppError::Other(format!("Failed to get resource directory: {}", e)))?
-        .join(PATCHER_DLL_NAME);
+        .join(file_name);
 
     if resource_path.exists() {
-        tracing::info!(
-            "Resolved patcher DLL from resource_dir: {}",
+        tracing::debug!(
+            "Resolved {} from resource_dir: {}",
+            file_name,
             resource_path.display()
         );
         return Ok(resource_path);
@@ -71,12 +64,13 @@ fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
     let dev_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .map(|p| p.join(PATCHER_DLL_NAME));
+        .map(|p| p.join(file_name));
 
     if let Some(ref path) = dev_path {
         if path.exists() {
-            tracing::info!(
-                "Resolved patcher DLL next to executable: {}",
+            tracing::debug!(
+                "Resolved {} next to executable: {}",
+                file_name,
                 path.display()
             );
             return Ok(path.clone());
@@ -87,17 +81,19 @@ fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
     // (`resource_dir()` during dev often points at `target/debug/`, but resources may not be copied there.)
     let manifest_resource_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
-        .join(PATCHER_DLL_NAME);
+        .join(file_name);
     if manifest_resource_path.exists() {
-        tracing::info!(
-            "Resolved patcher DLL from CARGO_MANIFEST_DIR resources: {}",
+        tracing::debug!(
+            "Resolved {} from CARGO_MANIFEST_DIR resources: {}",
+            file_name,
             manifest_resource_path.display()
         );
         return Ok(manifest_resource_path);
     }
 
     Err(AppError::Other(format!(
-        "Patcher DLL not found. Tried:\n - {}\n - {}\n - {}",
+        "{} not found. Tried:\n - {}\n - {}\n - {}",
+        file_name,
         resource_path.display(),
         dev_path
             .as_ref()
@@ -153,26 +149,18 @@ pub(crate) fn start_patcher_inner(
         (Arc::clone(&patcher_state.stop_flag), Arc::clone(&state.0))
     };
 
-    tracing::info!("Start patcher requested (legacy DLL mode)");
-
-    // Resolve DLL path and snapshot settings
-    let dll_path = resolve_patcher_dll_path(app_handle)?;
-    tracing::info!("Using patcher DLL: {}", dll_path.display());
+    tracing::debug!("Start patcher requested (external injector)");
+    let injector_exe = resolve_resource(app_handle, INJECTOR_EXE_NAME)?;
+    tracing::debug!("Using injector: {}", injector_exe.display());
 
     // Stash config for hot-reload
     {
         let mut patcher_state = state.0.lock().mutex_err()?;
         patcher_state.last_config = Some(StoredPatcherConfig {
-            log_file: config.log_file.clone(),
-            timeout_ms: config.timeout_ms,
             flags: config.flags,
             workshop_projects: config.workshop_projects.clone(),
         });
     }
-
-    let log_file = config.log_file.clone();
-    let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
-    let flags = config.flags.unwrap_or(0);
 
     // tray: we see if we are loading Workshop or Library based on the config
     let is_workshop = config
@@ -189,7 +177,7 @@ pub(crate) fn start_patcher_inner(
         .collect();
 
     let settings_snapshot = settings.0.lock().mutex_err()?.clone();
-    tracing::info!(
+    tracing::debug!(
         "Settings snapshot: league_path={} mod_storage_path={}",
         settings_snapshot
             .league_path
@@ -203,6 +191,20 @@ pub(crate) fn start_patcher_inner(
             .unwrap_or_else(|| "<unset>".to_string())
     );
     let library_clone = library.0.clone();
+    let host_flags = config.flags.unwrap_or(0) as u32;
+
+    // Decide whether to elevate the injection host. An elevated game can only be
+    // injected by an equally elevated host, so we elevate when the user opts in
+    // OR when we detect League is configured to run as administrator. If the
+    // manager is already elevated, any host it spawns inherits high integrity,
+    // so the `--elevate` UAC bridge would be redundant and we skip it.
+    let manager_elevated = crate::diagnostics::manager_is_elevated();
+    let league_admin = crate::diagnostics::league_configured_as_admin();
+    let should_elevate = !manager_elevated && (settings_snapshot.elevate_injector || league_admin);
+    tracing::info!(
+        "Injector elevation = {should_elevate} (opt_in={}, league_admin={league_admin}, manager_elevated={manager_elevated})",
+        settings_snapshot.elevate_injector
+    );
 
     // tray: clone the app handle so we can pass it into the background thread
     let app_handle_thread = app_handle.clone();
@@ -274,18 +276,26 @@ pub(crate) fn start_patcher_inner(
         };
         let _ = crate::tray::set_tray_state(app_handle_thread.clone(), on_state);
 
-        // This blocks until the game closes or the patcher is stopped
-        match run_legacy_patcher_loop(
-            &dll_path,
-            &overlay_root_str,
-            log_file.as_deref(),
-            timeout_ms,
-            flags,
-            &stop_flag,
-        ) {
-            Ok(()) => tracing::info!("Patcher loop completed successfully"),
-            Err(LegacyPatcherLoopError::Stopped) => tracing::info!("Patcher stopped by request"),
-            Err(e) => tracing::error!("Patcher loop error: {}", e),
+        // Build the host config from the patcher settings.
+        let host_config = HostConfig {
+            prefix: overlay_root_str.clone(),
+            log_level: HostLogLevel::Info,
+            flags: host_flags,
+        };
+
+        // This blocks until the game closes or the patcher is stopped. The
+        // host runs as a separate process and communicates over a line protocol,
+        // so we never load the patcher DLL into the manager.
+        match Injector::new(injector_exe)
+            .with_elevate(should_elevate)
+            .run(&overlay_root_str, &stop_flag, &host_config)
+        {
+            Ok(()) => tracing::info!("Injector stopped"),
+            Err(e) => {
+                tracing::error!("Injector error: {}", e);
+                let error_response: AppErrorResponse = AppError::Other(e.to_string()).into();
+                let _ = app_handle_thread.emit("patcher-error", &error_response);
+            }
         }
 
         // Cleanup Phase

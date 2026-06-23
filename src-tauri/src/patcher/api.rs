@@ -1,3 +1,10 @@
+//! Legacy in-process patcher DLL API.
+//!
+//! **Deprecated**: Injection now goes through the host process (see `host.rs`).
+//! This module loaded the patcher DLL into the manager process, which interfered
+//! with Vanguard. Kept as a reference for the eventual native Rust reimplementation.
+#![allow(dead_code)]
+
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -21,7 +28,7 @@ pub enum CSLogLevel {
 pub enum PatcherError {
     #[error("Failed to load patcher DLL: {0}")]
     LoadFailed(#[from] libloading::Error),
-    #[error("Failed to initialize cslol: {0}")]
+    #[error("Failed to initialize patcher: {0}")]
     InitFailed(String),
     #[error("Failed to set patcher config: {0}")]
     SetConfigFailed(String),

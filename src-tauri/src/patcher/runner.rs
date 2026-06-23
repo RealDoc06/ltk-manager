@@ -1,3 +1,10 @@
+//! Legacy in-process patcher loop.
+//!
+//! **Deprecated**: Injection now goes through the host process (see `host.rs`).
+//! This ran the hook lifecycle in-process via the patcher DLL, which interfered
+//! with Vanguard. Kept as a reference for the eventual native Rust reimplementation.
+#![allow(dead_code)]
+
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 

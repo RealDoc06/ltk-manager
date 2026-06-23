@@ -1,4 +1,6 @@
 pub mod api;
+pub mod host;
+pub mod injector;
 pub mod runner;
 
 use std::sync::atomic::AtomicBool;
@@ -35,8 +37,6 @@ impl Default for PatcherState {
 /// Stored patcher configuration for hot-reload (re-start with the same options).
 #[derive(Debug, Clone)]
 pub struct StoredPatcherConfig {
-    pub log_file: Option<String>,
-    pub timeout_ms: Option<u32>,
     pub flags: Option<u64>,
     pub workshop_projects: Option<Vec<String>>,
 }

@@ -69,7 +69,6 @@ pub fn reg_read_num(root: HKEY, subkey: &str, value: &str) -> Option<u64> {
 }
 
 /// Read a `REG_SZ` value as a UTF-16 string. Returns `None` on failure.
-#[allow(dead_code)] // used in future fix-action code
 pub fn reg_read_str(root: HKEY, subkey: &str, value: &str) -> Option<String> {
     let subkey_w = to_wide(subkey);
     let value_w = to_wide(value);

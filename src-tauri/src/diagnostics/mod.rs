@@ -1,6 +1,5 @@
 //! Diagnostics module — system health checks for troubleshooting patcher issues.
 //!
-//! Replaces and extends the original `cslol-diag.exe` tool from cslol-manager.
 //! Each check is a pure function that returns a [`Check`]; the report is the
 //! ordered list of all checks. Phase 1 is read-only; fixes (registry edits,
 //! service stops) are deferred to a later phase via shown commands the user
@@ -130,12 +129,41 @@ pub(crate) struct CheckCtx {
     /// True when [`mod_storage_path`] came from the fallback (user has not
     /// configured a custom path in Settings).
     pub mod_storage_is_default: bool,
-    /// Resource directory containing `cslol-dll.dll`. None if it could not be resolved.
+    /// Resource directory containing the patcher DLL. None if it could not be resolved.
     pub patcher_dll_path: Option<PathBuf>,
     /// Manager executable path. Unused by phase-1 checks but kept for the
     /// future handle-leak / signature checks on the manager itself.
     #[allow(dead_code)]
     pub manager_exe: Option<PathBuf>,
+}
+
+/// Whether League/Riot is configured to launch elevated (an AppCompatFlags
+/// `RUNASADMIN` layer on its executable). The patcher uses this to auto-enable
+/// host elevation, since an elevated game can only be injected by an elevated
+/// host. Always `false` off Windows.
+pub(crate) fn league_configured_as_admin() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        compat_flags::league_runs_as_admin()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// Whether the manager process itself is running elevated. When it is, any host
+/// it spawns inherits high integrity, so the `--elevate` UAC bridge is
+/// unnecessary. Always `false` off Windows.
+pub(crate) fn manager_is_elevated() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        processes::is_running_as_admin()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
 }
 
 /// Build a [`Check`] for a quick OK result with no details.

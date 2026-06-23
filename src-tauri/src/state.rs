@@ -207,7 +207,7 @@ pub struct Settings {
     /// Always start the patcher automatically on launch. Default: false.
     #[serde(default)]
     pub always_start_patcher: bool,
-    /// Whether the user has dismissed the cslol-manager migration banner.
+    /// Whether the user has dismissed the migration banner.
     #[serde(default)]
     pub migration_dismissed: bool,
     /// Global hotkey accelerator for reloading mods (e.g. "Ctrl+Shift+R").
@@ -243,6 +243,14 @@ pub struct Settings {
     /// the "show performance warnings" setting if/when we add one.
     #[serde(default)]
     pub has_seen_hdd_warning: bool,
+    /// Run the injection host elevated (UAC). An elevated game can only be
+    /// injected by an equally elevated host, so this is required when League
+    /// runs as administrator. Off by default: when off, non-elevated users
+    /// avoid a UAC prompt on every patcher start. Auto-elevation still kicks in
+    /// when League is detected configured to run as admin, regardless of this
+    /// flag (see `commands::patcher::start_patcher_inner`).
+    #[serde(default)]
+    pub elevate_injector: bool,
 }
 
 impl Default for Settings {
@@ -274,6 +282,7 @@ impl Default for Settings {
             author_profiles: vec![],
             default_author_profile_id: None,
             has_seen_hdd_warning: false,
+            elevate_injector: false,
         }
     }
 }
@@ -336,6 +345,7 @@ mod tests {
             }],
             default_author_profile_id: Some("test-id".to_string()),
             has_seen_hdd_warning: false,
+            elevate_injector: false,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let deserialized: Settings = serde_json::from_str(&json).unwrap();

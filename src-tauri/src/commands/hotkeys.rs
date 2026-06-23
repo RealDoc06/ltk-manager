@@ -48,8 +48,6 @@ pub(crate) fn execute_hot_reload(app_handle: &AppHandle) -> AppResult<()> {
     let workshop_projects = config.workshop_projects.clone();
 
     let patcher_config = PatcherConfig {
-        log_file: config.log_file,
-        timeout_ms: config.timeout_ms,
         flags: config.flags,
         workshop_projects: config.workshop_projects,
     };
@@ -224,8 +222,6 @@ fn hot_reload_mods_inner(
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     let patcher_config = PatcherConfig {
-        log_file: config.log_file,
-        timeout_ms: config.timeout_ms,
         flags: config.flags,
         workshop_projects: config.workshop_projects,
     };
@@ -278,7 +274,8 @@ fn kill_league_inner(
 
 /// Wait for the patcher thread to finish (with timeout).
 fn wait_for_patcher_stop(state: &PatcherState) -> AppResult<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Must exceed the host's shutdown grace (`HostProcess::SHUTDOWN_GRACE`, 5s)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     loop {
         {
             let ps = state.0.lock().mutex_err()?;

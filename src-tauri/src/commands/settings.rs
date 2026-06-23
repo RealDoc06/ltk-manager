@@ -93,6 +93,18 @@ fn list_available_wads_inner(state: &State<SettingsState>) -> AppResult<Vec<Stri
     list_game_wads(&game_dir)
 }
 
+/// Whether League is configured to launch as administrator (an AppCompatFlags
+/// `RUNASADMIN` layer on its executable).
+///
+/// When true, the patcher auto-elevates the injection host even if the
+/// "run injector elevated" setting is off, since an elevated game can only be
+/// injected by an elevated host. The settings UI surfaces this so users
+/// understand why a UAC prompt may appear despite the setting being off.
+#[tauri::command]
+pub fn detect_league_run_as_admin() -> IpcResult<bool> {
+    IpcResult::ok(crate::diagnostics::league_configured_as_admin())
+}
+
 /// Check if initial setup is required (league path not configured).
 #[tauri::command]
 pub fn check_setup_required(state: State<SettingsState>) -> IpcResult<bool> {
