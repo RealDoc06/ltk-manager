@@ -14,8 +14,7 @@ const MIN_OK_BUILD: u32 = 19045;
 const KNOWN_BAD_BUILD: u32 = 22000;
 
 /// Read OS major/minor/build from the kernel-shared user data page (KUSER_SHARED_DATA).
-/// This is the same trick `cslol-diag` used and avoids `GetVersionExW` lying
-/// when the manager isn't manifested for the current OS.
+/// This avoids `GetVersionExW` lying when the manager isn't manifested for the current OS.
 #[cfg(target_os = "windows")]
 fn read_kuser_version() -> (u32, u32, u32) {
     // SAFETY: KUSER_SHARED_DATA is mapped read-only at 0x7FFE0000 on every

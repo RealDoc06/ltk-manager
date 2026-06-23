@@ -24,9 +24,11 @@ export type ModWadReport = {
    */
   isStale: boolean;
   /**
-   * Champions / maps / tags derived from `affected_wads`. Computed on read
-   * from the WAD footprint, never persisted — improving the classification
-   * tables takes effect on the next read with no re-analysis.
+   * Champions / maps / tags derived from the mod's contents. Computed at
+   * analysis time — precisely from a modpkg's chunk paths when available,
+   * otherwise coarsely from `affected_wads` — and persisted so reads don't
+   * re-open the archive. Improving the classifier takes effect on the next
+   * analysis (e.g. reinstall or "Analyze uncategorized").
    */
   derived: DerivedCategorization;
 };

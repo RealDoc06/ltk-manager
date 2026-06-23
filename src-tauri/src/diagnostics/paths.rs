@@ -5,7 +5,7 @@
 //! - Storage NOT inside League dir
 //! - Cloud-sync attribute (OneDrive offline / RECALL_ON_DATA_ACCESS)
 //!
-//! Free-space and length thresholds match cslol-diag (1 GB / 128 chars).
+//! Free-space and length thresholds: 1 GB / 128 chars.
 
 use std::path::{Path, PathBuf};
 

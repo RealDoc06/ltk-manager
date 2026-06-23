@@ -103,8 +103,7 @@ TanStack Query deduplicates identical queries, so multiple components calling th
 - `commands/` — `#[tauri::command]` wrappers (one file per domain: `mods.rs`, `profiles.rs`, `patcher.rs`, `settings.rs`, `workshop.rs`, `shell.rs`, `app.rs`)
 - `mods/mod.rs` — Business logic for mod install/uninstall/toggle, profile CRUD, library index management
 - `overlay/` — Overlay building, content providers (`modpkg_content.rs`, `fantome_content.rs`)
-- `patcher/` — Patcher lifecycle (start/stop/status), thread management with `Arc<AtomicBool>` stop flag
-- `legacy_patcher/` — FFI integration with `cslol-dll.dll`
+- `patcher/` — Patcher lifecycle (start/stop/status), thread management with `Arc<AtomicBool>` stop flag. `patcher/injector.rs` spawns and supervises the external `cslol-host.exe` injection host over a stdin/stdout line protocol (`patcher/host.rs`); the overlay/prefix dir is sent via a `config prefix` command, not as an argv. The host internally drives `cslol-inj.exe`, and with `--elevate` (auto-enabled when League runs as admin) it bridges to a high-integrity worker via UAC.
 
 ### State
 
@@ -168,7 +167,7 @@ TanStack Router with file-based routing in `src/routes/`. Route tree is auto-gen
 
 **Also wrapped:**
 | Component | Usage | Base-UI Primitive |
-| ------------ | -------- | --------------------------------- |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ----------------- |
 | `Progress` (compound: `Root`, `Track`, `Indicator`) | Progress bars | `Progress` |
 | `Combobox` (compound: `Root`, `Input`, `Trigger`, `Portal`, `Positioner`, `Popup`, `List`, `Item`, `Empty`, `Clear`, `Chips`, `Chip`, `ChipRemove`) | Autocomplete / combobox | `Combobox` |
 | `MultiSelect` | Multi-value combobox | Wraps `Combobox` |

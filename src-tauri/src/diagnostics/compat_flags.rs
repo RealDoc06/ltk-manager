@@ -1,4 +1,4 @@
-//! AppCompatFlags scan — the load-bearing check from cslol-diag.
+//! AppCompatFlags scan — critical check for patcher issues.
 //!
 //! Windows stores per-executable compatibility-mode settings under
 //! `Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers` in
@@ -20,7 +20,7 @@
 use super::{check, Category, Check, Severity};
 
 #[cfg(target_os = "windows")]
-use super::win_util::{reg_list_value_names, ROOTS};
+use super::win_util::{reg_list_value_names, reg_read_str, ROOTS};
 #[cfg(target_os = "windows")]
 use super::{check_ok, CheckDetail};
 
@@ -84,7 +84,7 @@ pub fn check_compat_flags() -> Check {
             if bad.len() == 1 { "y" } else { "ies" }
         )
     } else {
-        format!("{} cslol/ltk-manager entries (suspicious)", sus.len())
+        format!("{} ltk-manager/patcher entries (suspicious)", sus.len())
     };
 
     let mut c = check(
@@ -127,6 +127,33 @@ pub fn check_compat_flags() -> Check {
         c.fix_command = Some(script.trim_end().to_string());
     }
     c
+}
+
+/// Returns true if any League/Riot executable carries a `RUNASADMIN`
+/// AppCompatFlags layer, i.e. the user configured the game to launch as
+/// administrator. An elevated game can only be injected by an equally elevated
+/// host, so the patcher uses this to auto-enable host elevation.
+///
+/// Unlike [`check_compat_flags`], which lists every offending entry for the
+/// diagnostics UI, this only answers the yes/no question the patcher needs, so
+/// it reads each entry's layer data (not just the value name) and looks for the
+/// specific `RUNASADMIN` token.
+#[cfg(target_os = "windows")]
+pub(crate) fn league_runs_as_admin() -> bool {
+    for (root, _label) in ROOTS {
+        for value_name in reg_list_value_names(*root, COMPAT_KEY) {
+            let name = basename(&value_name);
+            if !BAD_PREFIXES.iter().any(|p| name.starts_with(p)) {
+                continue;
+            }
+            if reg_read_str(*root, COMPAT_KEY, &value_name)
+                .is_some_and(|layers| layers.to_ascii_uppercase().contains("RUNASADMIN"))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "windows"))]

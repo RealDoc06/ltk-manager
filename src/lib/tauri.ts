@@ -88,6 +88,7 @@ export const api = {
   autoDetectLeaguePath: () => invokeResult<string | null>("auto_detect_league_path"),
   validateLeaguePath: (path: string) => invokeResult<boolean>("validate_league_path", { path }),
   checkSetupRequired: () => invokeResult<boolean>("check_setup_required"),
+  detectLeagueRunAsAdmin: () => invokeResult<boolean>("detect_league_run_as_admin"),
   listAvailableWads: () => invokeResult<string[]>("list_available_wads"),
 
   // Mods

@@ -5,17 +5,7 @@
  */
 export type PatcherConfig = {
   /**
-   * Optional log file path.
-   */
-  logFile?: string;
-  /**
-   * Timeout in milliseconds for hook initialization. Defaults to 5 minutes.
-   */
-  timeoutMs?: number;
-  /**
-   * Optional legacy patcher flags (matches `cslol_set_flags`).
-   *
-   * If not provided, defaults to 0 (equivalent to `--opts:none` in cslol-tools).
+   * Optional hook flags bitmask forwarded to the injection host
    */
   flags?: number;
   /**

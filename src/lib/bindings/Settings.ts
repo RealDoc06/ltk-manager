@@ -57,7 +57,7 @@ export type Settings = {
    */
   alwaysStartPatcher: boolean;
   /**
-   * Whether the user has dismissed the cslol-manager migration banner.
+   * Whether the user has dismissed the migration banner.
    */
   migrationDismissed: boolean;
   /**
@@ -96,4 +96,13 @@ export type Settings = {
    * the "show performance warnings" setting if/when we add one.
    */
   hasSeenHddWarning: boolean;
+  /**
+   * Run the injection host elevated (UAC). An elevated game can only be
+   * injected by an equally elevated host, so this is required when League
+   * runs as administrator. Off by default: when off, non-elevated users
+   * avoid a UAC prompt on every patcher start. Auto-elevation still kicks in
+   * when League is detected configured to run as admin, regardless of this
+   * flag (see `commands::patcher::start_patcher_inner`).
+   */
+  elevateInjector: boolean;
 };
