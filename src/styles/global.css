@@ -56,11 +56,11 @@
   --space-012: calc(12 * 4.5px * var(--zoom-scale));
 
   /* Border radius */
-  --radius-001: 4px;
-  --radius-002: 6px;
-  --radius-003: 8px;
-  --radius-004: 12px;
-  --radius-005: 16px;
+  --radius-001: 2px;
+  --radius-002: 4px;
+  --radius-003: 6px;
+  --radius-004: 9px;
+  --radius-005: 13px;
   --radius-006: 9999px;
 
   /* Icon sizes (base scaled down 25%, then by zoom) */
