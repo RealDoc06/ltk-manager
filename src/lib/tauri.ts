@@ -81,6 +81,7 @@ export type DeepLinkBlockedPayload = {
 export const api = {
   getAppInfo: () => invokeResult<AppInfo>("get_app_info"),
   getPlatformSupport: () => invokeResult<PlatformSupport>("get_platform_support"),
+  showMainWindow: () => invokeResult<void>("show_main_window"),
 
   // Settings
   getSettings: () => invokeResult<Settings>("get_settings"),

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -110,6 +110,25 @@ impl ModLibrary {
             }
         }
         Ok(reconciled)
+    }
+
+    /// Run [`reconcile_index`](Self::reconcile_index) on a detached background
+    /// thread so the Tauri event loop starts immediately and IPC stays
+    /// responsive during startup instead of blocking on a disk scan.
+    ///
+    /// Emits `library-changed` when the index is modified so the frontend
+    /// refreshes its queries. [`WadReportState`] must already be managed before
+    /// calling this, since reconciliation reads it via `try_state`.
+    pub fn reconcile_in_background(&self, settings: Settings) {
+        let library = self.clone();
+        std::thread::spawn(move || match library.reconcile_index(&settings) {
+            Ok(true) => {
+                tracing::info!("Library index reconciled on startup");
+                let _ = library.app_handle.emit("library-changed", ());
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("Failed to reconcile library on startup: {}", e),
+        });
     }
 
     /// Read-only index access: acquire lock, load index, run closure.

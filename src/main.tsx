@@ -8,6 +8,7 @@ import ReactDOM from "react-dom/client";
 
 import { ToastProvider } from "./components/ToastProvider";
 import { queryClient } from "./lib/query";
+import { api } from "./lib/tauri";
 import { useTheme } from "./modules/settings";
 import { routeTree } from "./routeTree.gen";
 
@@ -18,10 +19,16 @@ declare module "@tanstack/react-router" {
     router: typeof router;
   }
 }
-// Function to show the application window
-async function showAppWindow() {
-  const appWindow = (await import("@tauri-apps/api/window")).getCurrentWindow();
-  appWindow.show();
+// Reveal the window once the app has mounted. It starts hidden (visible:false);
+// the window/webview backgroundColor (#1c1c1f) plus the dark shell in index.html
+// mean it reveals as the dark loading screen, never a white flash. The backend
+// keeps it hidden when the user starts in the tray.
+//
+// Deliberately a direct call, not requestAnimationFrame: while the window is
+// hidden the WebView document is `hidden`, which pauses rAF — a deferred reveal
+// could deadlock and never show the window.
+function showAppWindow() {
+  void api.showMainWindow();
 }
 
 // Theme provider component that applies theme to document
