@@ -1,24 +1,22 @@
 import { useMemo } from "react";
 
-const DEFAULT_LIMIT = 50;
-
 /**
- * Filter `availableWads` to at most `limit` suggestions that contain the
- * trimmed `draft` (case-insensitive) and aren't in `excluded`.
+ * Filter `availableWads` to every suggestion that contains the trimmed `draft`
+ * (case-insensitive) and isn't in `excluded`, preserving input order.
  *
  * Returns an empty list when `availableWads` is empty. An empty `draft` yields
- * the first `limit` non-excluded WADs in their original order.
+ * all non-excluded WADs. The result is unbounded — the consuming dropdown
+ * virtualizes, so rendering the full set stays cheap.
  */
 export function useWadAutocomplete(
   draft: string,
   availableWads: string[],
   excluded: Set<string>,
-  limit: number = DEFAULT_LIMIT,
 ): string[] {
   return useMemo(() => {
     const q = draft.trim().toLowerCase();
     const pool = availableWads.filter((w) => !excluded.has(w));
-    if (!q) return pool.slice(0, limit);
-    return pool.filter((w) => w.includes(q)).slice(0, limit);
-  }, [draft, availableWads, excluded, limit]);
+    if (!q) return pool;
+    return pool.filter((w) => w.includes(q));
+  }, [draft, availableWads, excluded]);
 }

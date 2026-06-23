@@ -5,4 +5,4 @@ export { useRegexPreview } from "./useRegexPreview";
 export { useWadAutocomplete } from "./useWadAutocomplete";
 export type { UseWadBlocklistResult } from "./useWadBlocklist";
 export { useWadBlocklist } from "./useWadBlocklist";
-export { countRegexMatches, isValidRegex } from "./wadRegex";
+export { countRegexMatches, isValidRegex, listRegexMatches } from "./wadRegex";
