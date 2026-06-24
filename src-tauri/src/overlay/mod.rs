@@ -4,6 +4,8 @@ use crate::state::{Settings, WadBlocklistEntry};
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
 
+pub mod linked_bins;
+
 const SCRIPTS_WAD: &str = "scripts.wad.client";
 const TFT_WAD: &str = "map22.wad.client";
 

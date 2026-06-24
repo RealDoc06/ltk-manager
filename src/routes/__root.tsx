@@ -4,10 +4,10 @@ import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { useAutoStartPatcher, useReducedMotion } from "@/hooks";
+import { useAutoStartPatcher, useReducedMotion, useSurfaceLinkedBinWarning } from "@/hooks";
 import { ProtocolInstallDialog, useDeepLinkListener } from "@/modules/deep-link";
 import { useLibraryWatcher } from "@/modules/library";
-import { PatcherStatusPill } from "@/modules/patcher";
+import { LinkedBinWarningDialog, PatcherStatusPill, WadScanFailedDialog } from "@/modules/patcher";
 import { useAppInfo, useCheckSetupRequired, useSettings } from "@/modules/settings";
 import { DevConsole, TitleBar, useDevLogStream } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
@@ -28,6 +28,7 @@ function RootLayout() {
   useDeepLinkListener();
   useLibraryWatcher();
   useAutoStartPatcher();
+  useSurfaceLinkedBinWarning();
 
   const update = useUpdaterUpdate();
   const { data: settings } = useSettings();
@@ -84,6 +85,8 @@ function RootLayout() {
         </div>
       </main>
       <ProtocolInstallDialog />
+      <WadScanFailedDialog />
+      <LinkedBinWarningDialog />
       <PatcherStatusPill />
       {import.meta.env.DEV && <DevConsole />}
     </div>

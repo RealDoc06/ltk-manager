@@ -1,7 +1,12 @@
 export { patcherKeys } from "./keys";
+export { useCheckLinkedBins } from "./useCheckLinkedBins";
+export { useGuardedStartPatcher } from "./useGuardedStartPatcher";
 export { useHotkeyEvents } from "./useHotkeyEvents";
 export { useOverlayProgress } from "./useOverlayProgress";
 export { usePatcherError } from "./usePatcherError";
 export { usePatcherStatus } from "./usePatcherStatus";
 export { useStartPatcher } from "./useStartPatcher";
 export { useStopPatcher } from "./useStopPatcher";
+export { useWadScanFailure } from "./useWadScanFailure";
+export type { WadScanOffender, WadScanOffenders } from "./useWadScanOffenders";
+export { useWadScanOffenders } from "./useWadScanOffenders";
