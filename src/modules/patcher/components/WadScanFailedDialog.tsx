@@ -256,9 +256,6 @@ function WadScanFailedContent({
             >
               Copy details
             </Button>
-            <Button variant="ghost" className="whitespace-nowrap" onClick={onClose}>
-              Dismiss
-            </Button>
             <Button
               variant="filled"
               className="whitespace-nowrap"
