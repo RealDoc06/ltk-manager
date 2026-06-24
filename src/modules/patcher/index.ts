@@ -1,5 +1,6 @@
 export {
   patcherKeys,
+  useGuardedStartPatcher,
   useOverlayProgress,
   usePatcherError,
   usePatcherStatus,

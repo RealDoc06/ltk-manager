@@ -155,7 +155,7 @@ export const DialogClose = forwardRef<HTMLButtonElement, DialogCloseProps>(
       <BaseDialog.Close
         ref={ref}
         className={twMerge(
-          "inline-flex h-8 w-8 items-center justify-center rounded-md",
+          "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md",
           "text-surface-200 transition-colors hover:bg-surface-700 active:bg-surface-800",
           className,
         )}

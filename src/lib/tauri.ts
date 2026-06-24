@@ -16,6 +16,7 @@ import type {
   ImportGitRepoArgs,
   InstalledMod,
   LibraryFolder,
+  LinkedBinReport,
   ModpkgInfo,
   ModWadReport,
   PackProjectArgs,
@@ -127,6 +128,7 @@ export const api = {
   startPatcher: (config: PatcherConfig) => invokeResult<void>("start_patcher", { config }),
   stopPatcher: () => invokeResult<void>("stop_patcher"),
   getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
+  checkLinkedBins: () => invokeResult<LinkedBinReport>("check_linked_bins"),
 
   // Hotkeys
   pauseHotkeys: () => invokeResult<void>("pause_hotkeys"),
