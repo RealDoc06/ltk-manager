@@ -1,7 +1,7 @@
 //! Patcher DLL diagnostics: presence, Authenticode signature, file lock.
 //!
 //! Vanguard / unrelated processes occasionally leave file handles open on
-//! `cslol-dll.dll`. When that happens, the patcher's next start either fails
+//! the patcher DLL. When that happens, the patcher's next start either fails
 //! to load the DLL or silently runs against a stale image. The lock-probe
 //! check here is the phase-1 detector; phase 2 will add full handle-owner
 //! enumeration via NtQuerySystemInformation.
@@ -32,7 +32,7 @@ pub fn check_dll_present(ctx: &CheckCtx) -> Check {
                 "Patcher DLL present",
                 Category::Patcher,
                 Severity::Bad,
-                "cslol-dll.dll not found at resolved path",
+                "Patcher DLL not found at resolved path",
             );
             c.details
                 .push(CheckDetail::new("path", p.display().to_string()));
@@ -130,12 +130,12 @@ pub fn check_dll_not_locked(ctx: &CheckCtx) -> Check {
                 "Patcher DLL not locked",
                 Category::Patcher,
                 Severity::Warn,
-                "Another process is holding cslol-dll.dll open",
+                "Another process is holding the patcher DLL open",
             );
             c.details
                 .push(CheckDetail::new("path", path.display().to_string()));
             c.suggestion = Some(
-                "An external process — most often Vanguard's vgc.exe or a previous patcher run that didn't clean up — has a handle on cslol-dll.dll. The patcher won't be able to swap in a fresh copy until the lock is released. Try: stop the patcher, close the manager, restart your PC, then start the manager again before launching League. (We'll add a per-handle 'who's holding this?' view in a future release.)"
+                "An external process — most often Vanguard's vgc.exe or a previous patcher run that didn't clean up — has a handle on the patcher DLL. The patcher won't be able to swap in a fresh copy until the lock is released. Try: stop the patcher, close the manager, restart your PC, then start the manager again before launching League. (We'll add a per-handle 'who's holding this?' view in a future release.)"
                     .into(),
             );
             c

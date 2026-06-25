@@ -1,17 +1,17 @@
 import { useEffect, useRef } from "react";
 
-import { useStartPatcher } from "@/modules/patcher/api";
+import { useGuardedStartPatcher } from "@/modules/patcher";
 import { useSettings } from "@/modules/settings";
 
 import { useHddWarning } from "./useHddWarning";
 
 export function useAutoStartPatcher() {
   const { data: settings } = useSettings();
-  const startPatcher = useStartPatcher();
+  const guardedStart = useGuardedStartPatcher();
   const maybeShowHddWarning = useHddWarning();
 
-  const startPatcherRef = useRef(startPatcher);
-  startPatcherRef.current = startPatcher;
+  const guardedStartRef = useRef(guardedStart);
+  guardedStartRef.current = guardedStart;
 
   const maybeShowHddWarningRef = useRef(maybeShowHddWarning);
   maybeShowHddWarningRef.current = maybeShowHddWarning;
@@ -24,7 +24,7 @@ export function useAutoStartPatcher() {
 
     (async () => {
       await maybeShowHddWarningRef.current();
-      startPatcherRef.current.mutate({});
+      await guardedStartRef.current({});
     })();
   }, [settings?.alwaysStartPatcher]);
 }

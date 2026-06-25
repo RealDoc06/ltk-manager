@@ -15,6 +15,10 @@ vi.mock("@/hooks", () => ({
   usePlatformSupport: mocks.usePlatformSupport,
 }));
 
+vi.mock("@/modules/settings/api", () => ({
+  useDetectLeagueRunAsAdmin: () => ({ data: false }),
+}));
+
 vi.mock("./WadBlocklistEditor", () => ({
   WadBlocklistEditor: () => null,
 }));

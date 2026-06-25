@@ -1,4 +1,13 @@
-import { AlertCircle, Plus, Regex as RegexIcon, Search, Trash2, X } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  AlertCircle,
+  ChevronRight,
+  Plus,
+  Regex as RegexIcon,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { match, P } from "ts-pattern";
 
@@ -8,7 +17,7 @@ import type { Settings, WadBlocklistEntry } from "@/lib/tauri";
 import { useAvailableWads } from "@/modules/settings/api";
 import {
   type BlocklistSortKey,
-  countRegexMatches,
+  listRegexMatches,
   useBlocklistView,
   useRegexPreview,
   useWadAutocomplete,
@@ -16,6 +25,10 @@ import {
 } from "@/modules/settings/hooks";
 
 type Mode = "exact" | "regex";
+
+/** Fixed suggestion row height (px) so the virtualizer can precompute positions
+ * without per-row measurement. */
+const SUGGESTION_ROW_HEIGHT = 32;
 
 interface WadBlocklistEditorProps {
   settings: Settings;
@@ -254,22 +267,13 @@ function ExactAddRow({
             autoComplete="off"
           />
           {open && suggestions.length > 0 && (
-            <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl">
-              {suggestions.map((wad) => (
-                <button
-                  type="button"
-                  key={wad}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    onDraftChange(wad);
-                    setOpen(false);
-                  }}
-                  className="flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-sm text-surface-200 hover:bg-surface-600"
-                >
-                  {wad}
-                </button>
-              ))}
-            </div>
+            <WadSuggestionList
+              suggestions={suggestions}
+              onSelect={(wad) => {
+                onDraftChange(wad);
+                setOpen(false);
+              }}
+            />
           )}
         </div>
         <Button variant="ghost" size="sm" onClick={onSubmit} disabled={!draft.trim()}>
@@ -286,6 +290,59 @@ function ExactAddRow({
       {noWadsAvailable && (
         <p className="text-xs text-surface-500">No WAD files were found under DATA.</p>
       )}
+    </div>
+  );
+}
+
+function WadSuggestionList({
+  suggestions,
+  onSelect,
+}: {
+  suggestions: string[];
+  onSelect: (wad: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: suggestions.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => SUGGESTION_ROW_HEIGHT,
+    overscan: 10,
+    getItemKey: (index) => suggestions[index]!,
+  });
+
+  return (
+    <div
+      ref={scrollRef}
+      className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl"
+    >
+      <div
+        role="presentation"
+        className="relative w-full"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const wad = suggestions[virtualRow.index]!;
+          return (
+            <button
+              type="button"
+              key={virtualRow.key}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelect(wad);
+              }}
+              className="absolute inset-x-0 flex cursor-pointer items-center px-3 text-left text-sm text-surface-200 hover:bg-surface-600"
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              title={wad}
+            >
+              <span className="min-w-0 truncate">{wad}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -376,31 +433,61 @@ function BlocklistRow({
   availableWads: string[] | undefined;
   onRemove: () => void;
 }) {
-  const regexMatchCount =
-    entry.kind === "regex" && availableWads ? countRegexMatches(entry.value, availableWads) : null;
+  const [expanded, setExpanded] = useState(false);
+
+  const matches = useMemo(
+    () =>
+      entry.kind === "regex" && availableWads ? listRegexMatches(entry.value, availableWads) : null,
+    [entry.kind, entry.value, availableWads],
+  );
+  const canExpand = matches !== null && matches.length > 0;
 
   return (
-    <div className="flex items-center justify-between gap-2 rounded-md bg-surface-800 px-3 py-2">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <KindBadge kind={entry.kind} />
-        <span
-          className={`truncate text-sm text-surface-100 ${entry.kind === "regex" ? "font-mono" : ""}`}
-          title={entry.value}
-        >
-          {entry.value}
-        </span>
-        {regexMatchCount !== null && (
-          <span className="shrink-0 text-xs text-surface-500">· {regexMatchCount} matched</span>
-        )}
+    <div className="rounded-md bg-surface-800">
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <KindBadge kind={entry.kind} />
+          <span
+            className={`truncate text-sm text-surface-100 ${entry.kind === "regex" ? "font-mono" : ""}`}
+            title={entry.value}
+          >
+            {entry.value}
+          </span>
+          {canExpand && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="flex shrink-0 cursor-pointer items-center gap-0.5 text-xs text-surface-500 hover:text-surface-300"
+            >
+              <ChevronRight
+                className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+              />
+              {matches.length} matched
+            </button>
+          )}
+          {matches !== null && matches.length === 0 && (
+            <span className="shrink-0 text-xs text-surface-500">· no matches</span>
+          )}
+        </div>
+        <IconButton
+          icon={<X className="h-3.5 w-3.5" />}
+          variant="ghost"
+          size="xs"
+          compact
+          onClick={onRemove}
+          aria-label={`Remove ${entry.value}`}
+        />
       </div>
-      <IconButton
-        icon={<X className="h-3.5 w-3.5" />}
-        variant="ghost"
-        size="xs"
-        compact
-        onClick={onRemove}
-        aria-label={`Remove ${entry.value}`}
-      />
+      {expanded && canExpand && (
+        <ul className="max-h-40 space-y-0.5 overflow-y-auto border-t border-surface-700 px-3 py-2">
+          {matches.map((wad) => (
+            <li key={wad} className="truncate font-mono text-xs text-surface-300" title={wad}>
+              {wad}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

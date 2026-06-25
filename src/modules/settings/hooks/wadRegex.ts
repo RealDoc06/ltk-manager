@@ -29,3 +29,16 @@ export function countRegexMatches(pattern: string, wads: string[]): number {
     return 0;
   }
 }
+
+/**
+ * Return the WADs in `wads` that match `pattern`, preserving input order.
+ * Returns `[]` for invalid patterns so callers don't have to guard.
+ */
+export function listRegexMatches(pattern: string, wads: string[]): string[] {
+  try {
+    const re = new RegExp(pattern, "i");
+    return wads.filter((wad) => re.test(wad));
+  } catch {
+    return [];
+  }
+}

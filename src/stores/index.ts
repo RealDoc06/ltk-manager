@@ -4,6 +4,7 @@ export * from "./displayStore";
 export * from "./libraryFilter";
 export * from "./librarySelection";
 export * from "./libraryView";
+export * from "./linkedBinGuard";
 export * from "./notifications";
 export * from "./patcherSession";
 export * from "./updater";

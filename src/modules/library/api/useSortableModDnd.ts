@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InstalledMod } from "@/lib/tauri";
 import { REMOVE_FROM_FOLDER_ID } from "@/modules/library/utils";
+import { useReorderDisabled } from "@/stores";
 
 import { useMoveModToFolder } from "./useMoveMod";
 
@@ -16,6 +17,7 @@ interface UseSortableModDndArgs {
 }
 
 export function useSortableModDnd({ mods, onReorder, folderId }: UseSortableModDndArgs) {
+  const reorderDisabled = useReorderDisabled();
   const moveModToFolder = useMoveModToFolder();
 
   const propsOrder = useMemo(() => mods.map((m) => m.id), [mods]);
@@ -43,18 +45,22 @@ export function useSortableModDnd({ mods, onReorder, folderId }: UseSortableModD
     setActiveId(event.active.id as string);
   }, []);
 
-  const handleDragOver = useCallback((event: DragOverEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    if (over.id === REMOVE_FROM_FOLDER_ID) return;
+  const handleDragOver = useCallback(
+    (event: DragOverEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      if (over.id === REMOVE_FROM_FOLDER_ID) return;
+      if (reorderDisabled) return;
 
-    setLocalOrder((prev) => {
-      const oldIndex = prev.indexOf(active.id as string);
-      const newIndex = prev.indexOf(over.id as string);
-      if (oldIndex === -1 || newIndex === -1) return prev;
-      return arrayMove(prev, oldIndex, newIndex);
-    });
-  }, []);
+      setLocalOrder((prev) => {
+        const oldIndex = prev.indexOf(active.id as string);
+        const newIndex = prev.indexOf(over.id as string);
+        if (oldIndex === -1 || newIndex === -1) return prev;
+        return arrayMove(prev, oldIndex, newIndex);
+      });
+    },
+    [reorderDisabled],
+  );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -65,11 +71,11 @@ export function useSortableModDnd({ mods, onReorder, folderId }: UseSortableModD
         return;
       }
 
-      if (localOrder.join() !== propsOrder.join()) {
+      if (!reorderDisabled && localOrder.join() !== propsOrder.join()) {
         onReorder(localOrder);
       }
     },
-    [folderId, localOrder, propsOrder, onReorder, moveModToFolder],
+    [folderId, localOrder, propsOrder, onReorder, moveModToFolder, reorderDisabled],
   );
 
   const handleDragCancel = useCallback(() => {

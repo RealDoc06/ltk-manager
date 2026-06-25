@@ -33,11 +33,7 @@ pub fn run(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let wad_report_state = WadReportState::new(storage_dir.as_deref());
     app.manage(wad_report_state);
 
-    match mod_library.0.reconcile_index(&settings) {
-        Ok(true) => tracing::info!("Library index reconciled on startup"),
-        Ok(false) => {}
-        Err(e) => tracing::warn!("Failed to reconcile library on startup: {}", e),
-    }
+    mod_library.0.reconcile_in_background(settings.clone());
 
     let hotkey_manager = crate::hotkeys::HotkeyManager::new(&app_handle);
     hotkey_manager.register_from_settings(&settings);
@@ -72,16 +68,6 @@ pub fn run(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let settings = settings_state.0.lock().unwrap();
         if settings.watcher_enabled {
             crate::mods::watcher::start_library_watcher(&app_handle);
-        }
-    }
-
-    {
-        let settings_state: tauri::State<'_, SettingsState> = app_handle.state();
-        let settings = settings_state.0.lock().unwrap();
-        if settings.start_in_tray || settings.start_in_tray_unless_update {
-            if let Some(window) = app_handle.get_webview_window("main") {
-                let _ = window.hide();
-            }
         }
     }
 

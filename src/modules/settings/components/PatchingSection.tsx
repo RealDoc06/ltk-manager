@@ -1,9 +1,17 @@
-import { AlertTriangle, CheckCircle2, ScanSearch, ShieldAlert, Wrench } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ScanSearch,
+  ShieldAlert,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
 import { useState } from "react";
 
-import { Button, SectionCard, Switch } from "@/components";
+import { AlertBox, Button, SectionCard, Switch } from "@/components";
 import { usePlatformSupport } from "@/hooks";
 import { api, isErr, type PatcherPreflight, type Settings } from "@/lib/tauri";
+import { useDetectLeagueRunAsAdmin } from "@/modules/settings/api";
 
 import { WadBlocklistEditor } from "./WadBlocklistEditor";
 
@@ -14,6 +22,7 @@ interface PatchingSectionProps {
 
 export function PatchingSection({ settings, onSave }: PatchingSectionProps) {
   const platform = usePlatformSupport();
+  const { data: leagueRunsAsAdmin } = useDetectLeagueRunAsAdmin();
   const [preflight, setPreflight] = useState<PatcherPreflight | null>(null);
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -148,6 +157,36 @@ export function PatchingSection({ settings, onSave }: PatchingSectionProps) {
                 Script modding is enabled. Only install mods from sources you trust.
               </p>
             </div>
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Injection" icon={<ShieldCheck className="h-5 w-5" />}>
+        <div className="space-y-3">
+          <label className="flex items-center justify-between gap-4">
+            <div>
+              <span className="block text-sm font-medium text-surface-200">
+                Run injector elevated
+              </span>
+              <span className="block text-sm text-surface-400">
+                Runs the injection host with administrator privileges. Required when League itself
+                runs as administrator. Leave this off unless mods fail to load — when on, Windows
+                shows a UAC prompt each time the patcher starts (unless LTK Manager is already
+                running as admin).
+              </span>
+            </div>
+            <Switch
+              checked={settings.elevateInjector}
+              onCheckedChange={(checked) => onSave({ ...settings, elevateInjector: checked })}
+            />
+          </label>
+
+          {leagueRunsAsAdmin && (
+            <AlertBox variant="warning">
+              League is configured to run as administrator, so the injector will be elevated
+              automatically. You may see a UAC prompt when the patcher starts even with this setting
+              off.
+            </AlertBox>
           )}
         </div>
       </SectionCard>

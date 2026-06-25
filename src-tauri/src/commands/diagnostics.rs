@@ -1,6 +1,6 @@
 //! Tauri command for running the diagnostic suite.
 //!
-//! Resolves the patcher DLL path the same way `start_patcher` does, snapshots
+//! Resolves the bundled hook DLL the injector loads into the game, snapshots
 //! settings, and runs every check in [`crate::diagnostics::run_all`]. The
 //! command never returns an error — checks that fail to gather data report
 //! `Severity::Warn` or `Severity::Bad` instead.
@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use tauri::Manager;
 use tauri::{AppHandle, State};
 
-/// Same lookup chain as `commands::patcher::resolve_patcher_dll_path`, but
-/// returns `None` instead of an error so we can still report the rest of the
+/// Same lookup chain as `commands::patcher::resolve_resource`, but returns
+/// `None` instead of an error so we can still report the rest of the
 /// diagnostics when the DLL is missing.
 #[cfg(target_os = "windows")]
 fn resolve_patcher_dll(app_handle: &AppHandle) -> Option<PathBuf> {

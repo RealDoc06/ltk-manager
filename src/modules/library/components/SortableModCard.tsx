@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 
 import type { InstalledMod } from "@/lib/tauri";
 import { usePatcherStatus } from "@/modules/patcher";
+import { useReorderDisabled } from "@/stores";
 
 import { ModCard } from "./ModCard";
 
@@ -20,8 +21,10 @@ export function SortableModCard({
   onViewDetails,
   onEditMetadata,
 }: SortableModCardProps) {
+  const reorderDisabled = useReorderDisabled();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: mod.id,
+    disabled: reorderDisabled ? { droppable: true } : false,
   });
   const { data: patcherStatus } = usePatcherStatus();
   const disabled = patcherStatus?.running ?? false;

@@ -45,19 +45,29 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // Persisting visibility state breaks the start-in-tray option
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
         .manage(logging_guards)
         .setup(setup::run)
         .invoke_handler(tauri::generate_handler![
             // App
             commands::get_app_info,
             commands::get_platform_support,
+            commands::show_main_window,
             // Settings
             commands::get_settings,
             commands::save_settings,
             commands::auto_detect_league_path,
             commands::validate_league_path,
             commands::check_setup_required,
+            commands::detect_league_run_as_admin,
             commands::list_available_wads,
             // Mods
             commands::get_installed_mods,
@@ -93,6 +103,7 @@ fn main() {
             commands::stop_patcher,
             commands::get_patcher_status,
             commands::preflight_patcher,
+            commands::check_linked_bins,
             // Hotkeys
             commands::pause_hotkeys,
             commands::resume_hotkeys,

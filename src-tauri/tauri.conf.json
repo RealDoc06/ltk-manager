@@ -20,7 +20,8 @@
         "decorations": false,
         "resizable": true,
         "transparent": false,
-        "visible": false
+        "visible": false,
+        "backgroundColor": "#1c1c1f"
       }
     ],
     "security": {

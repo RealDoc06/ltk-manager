@@ -231,8 +231,7 @@ ltk-manager/
 │       ├── commands/           # IPC command handlers
 │       ├── mods/               # Mod install/uninstall/toggle logic
 │       ├── overlay/            # Overlay building
-│       ├── patcher/            # Patcher lifecycle
-│       ├── legacy_patcher/     # cslol-dll FFI integration
+│       ├── patcher/            # Patcher lifecycle + external injection host (cslol-host.exe)
 │       ├── state.rs            # App state and settings
 │       └── error.rs            # Error types and IPC result helpers
 ├── docs/                       # Documentation

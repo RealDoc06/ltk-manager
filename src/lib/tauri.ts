@@ -16,6 +16,7 @@ import type {
   ImportGitRepoArgs,
   InstalledMod,
   LibraryFolder,
+  LinkedBinReport,
   ModpkgInfo,
   ModWadReport,
   PackProjectArgs,
@@ -82,6 +83,7 @@ export type DeepLinkBlockedPayload = {
 export const api = {
   getAppInfo: () => invokeResult<AppInfo>("get_app_info"),
   getPlatformSupport: () => invokeResult<PlatformSupport>("get_platform_support"),
+  showMainWindow: () => invokeResult<void>("show_main_window"),
 
   // Settings
   getSettings: () => invokeResult<Settings>("get_settings"),
@@ -89,6 +91,7 @@ export const api = {
   autoDetectLeaguePath: () => invokeResult<string | null>("auto_detect_league_path"),
   validateLeaguePath: (path: string) => invokeResult<boolean>("validate_league_path", { path }),
   checkSetupRequired: () => invokeResult<boolean>("check_setup_required"),
+  detectLeagueRunAsAdmin: () => invokeResult<boolean>("detect_league_run_as_admin"),
   listAvailableWads: () => invokeResult<string[]>("list_available_wads"),
 
   // Mods
@@ -127,6 +130,7 @@ export const api = {
   stopPatcher: () => invokeResult<void>("stop_patcher"),
   getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
   preflightPatcher: () => invokeResult<PatcherPreflight>("preflight_patcher"),
+  checkLinkedBins: () => invokeResult<LinkedBinReport>("check_linked_bins"),
 
   // Hotkeys
   pauseHotkeys: () => invokeResult<void>("pause_hotkeys"),

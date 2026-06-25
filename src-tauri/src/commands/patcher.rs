@@ -319,6 +319,95 @@ fn backend_event_message(event: &BackendEvent) -> String {
     }
 }
 
+/// One archive that failed the integrity scan, sent in [`WadScanFailedPayload`].
+///
+/// Retained for the `patcher-wad-scan-failed` event contract and its generated
+/// TypeScript binding. The scan itself runs inside the Windows injection host,
+/// which the macOS-focused fork does not use, so this is currently only emitted
+/// on Windows builds wired to that host.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct WadScanFailureInfo {
+    /// The offending archive (e.g. `TahmKench.wad.client`), if its name parsed.
+    pub wad: Option<String>,
+    /// The NTSTATUS-style code the scan reported (e.g. `c0000229` skinhack,
+    /// `c000003e` corrupt WAD).
+    pub status: String,
+}
+
+/// Payload for the `patcher-wad-scan-failed` event, emitted when the injected
+/// DLL's integrity scan rejects one or more modded archives.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct WadScanFailedPayload {
+    /// The archives that failed the scan, de-duplicated. May be empty if no
+    /// names could be parsed from the scan log.
+    pub failures: Vec<WadScanFailureInfo>,
+}
+
+/// One library mod flagged by the pre-patch linked-bin check, sent in [`LinkedBinReport`].
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedBinOffenderInfo {
+    /// Library mod id (matches `InstalledMod.id` on the frontend).
+    pub mod_id: String,
+    /// Mod display name — a fallback for the UI when it can't resolve the id.
+    pub display_name: String,
+    /// WAD targets (e.g. `Ahri.wad.client`) in this mod that contain the unresolved
+    /// bins. May be empty when the offending bin came from a RAW override.
+    pub wads: Vec<String>,
+    /// The missing linked bin paths, deduped.
+    pub missing_links: Vec<String>,
+}
+
+/// Result of [`check_linked_bins`]: enabled mods whose property-bins reference linked
+/// dependencies that won't resolve at load time. Empty `offenders` means clean.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedBinReport {
+    pub offenders: Vec<LinkedBinOffenderInfo>,
+}
+
+/// Validate enabled library mods for unresolved property-bin linked dependencies
+/// before starting the patcher.
+///
+/// The cslol patcher no longer treats a missing linked bin as fatal, so we run the
+/// equivalent check here proactively. The frontend uses the result to warn the user
+/// and offer to disable the offending mod(s) or start anyway.
+#[tauri::command]
+pub fn check_linked_bins(
+    settings: State<SettingsState>,
+    library: State<ModLibraryState>,
+) -> IpcResult<LinkedBinReport> {
+    check_linked_bins_inner(&settings, &library).into()
+}
+
+fn check_linked_bins_inner(
+    settings: &State<SettingsState>,
+    library: &State<ModLibraryState>,
+) -> AppResult<LinkedBinReport> {
+    let settings_snapshot = settings.0.lock().mutex_err()?.clone();
+    let library = library.0.clone();
+    let offenders = library.validate_linked_bins(&settings_snapshot)?;
+    Ok(LinkedBinReport {
+        offenders: offenders
+            .into_iter()
+            .map(|o| LinkedBinOffenderInfo {
+                mod_id: o.mod_id,
+                display_name: o.display_name,
+                wads: o.wads,
+                missing_links: o.missing_links,
+            })
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

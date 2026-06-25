@@ -312,7 +312,8 @@ fn kill_league_inner(
 
 /// Wait for the patcher thread to finish (with timeout).
 fn wait_for_patcher_stop(state: &PatcherState) -> AppResult<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Must exceed the host's shutdown grace (`HostProcess::SHUTDOWN_GRACE`, 5s)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     loop {
         {
             let ps = state.0.lock().mutex_err()?;
