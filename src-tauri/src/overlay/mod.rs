@@ -216,6 +216,8 @@ fn prepare_macos_overlay_wads(
     }
 
     let mut restored = 0;
+    let mut stripped = 0;
+    let mut reverted = 0;
     let mut repacked = 0;
     let mut repaired = 0;
     for entry in walkdir::WalkDir::new(&data_dir).follow_links(false) {
@@ -243,6 +245,24 @@ fn prepare_macos_overlay_wads(
             if restore_subchunk_overrides(entry.path(), &source_path)? {
                 restored += 1;
             }
+            // Strip oversized new audio (Wwise .bnk / .wpk) entries that the
+            // macOS game's audio engine can't ingest. Vayne ships a 36 MB
+            // BKHD bank as a brand-new chunk that crashes the game right after
+            // the loading screen completes. The mod still applies textures/VFX,
+            // just without custom voice lines.
+            let stripped_hashes = strip_oversized_audio_chunks(entry.path(), &source_path)?;
+            if !stripped_hashes.is_empty() {
+                stripped += 1;
+                // The BIN/PTCH files that the mod ships as overrides still
+                // reference the just-stripped audio paths by hash. When the game
+                // looks them up it gets `AudioManager: Failed to load Bank for
+                // Wwise (...)` and then crashes shortly after. Revert any
+                // mod-overridden BIN that points at a stripped chunk so the
+                // game loads its original audio config instead.
+                if revert_audio_referring_overrides(entry.path(), &source_path, &stripped_hashes)? {
+                    reverted += 1;
+                }
+            }
             if canonicalize_macos_wad(entry.path(), &source_path)? {
                 repacked += 1;
             } else if repair_macos_wad_header(entry.path(), &source_path)? {
@@ -252,13 +272,353 @@ fn prepare_macos_overlay_wads(
     }
 
     tracing::info!(
-        "Overlay: restored subchunks in {} WAD(s), canonicalized {} macOS WAD(s), repaired headers for {} WAD(s), linked {} blocked WAD passthrough(s)",
+        "Overlay: restored subchunks in {} WAD(s), stripped oversized audio in {} WAD(s), reverted dangling-audio BIN overrides in {} WAD(s), canonicalized {} macOS WAD(s), repaired headers for {} WAD(s), linked {} blocked WAD passthrough(s)",
         restored,
+        stripped,
+        reverted,
         repacked,
         repaired,
         passthroughs
     );
     Ok(())
+}
+
+/// Maximum size (in bytes) for a mod-added Wwise audio chunk. Banks above this
+/// threshold crash the macOS game's Wwise loader on first playback. Riot's own
+/// audio banks live well under this limit; oversized mod banks are dropped from
+/// the overlay so the visual portion of the mod still applies.
+#[cfg(target_os = "macos")]
+const MAX_MACOS_AUDIO_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Drop new (not-in-source) Wwise `.bnk`/`.wpk` entries whose compressed size
+/// exceeds [`MAX_MACOS_AUDIO_CHUNK_BYTES`]. Returns the set of path hashes
+/// that were stripped, empty if nothing matched.
+#[cfg(target_os = "macos")]
+fn strip_oversized_audio_chunks(path: &Path, source_path: &Path) -> AppResult<HashSet<u64>> {
+    use byteorder::{WriteBytesExt as _, LE};
+    use ltk_file::LeagueFileKind;
+    use ltk_wad::WadChunk;
+
+    let mut overlay_wad = ltk_wad::Wad::mount(File::open(path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read overlay WAD {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let overlay_chunks = overlay_wad.chunks().clone();
+
+    let source_path_hashes: HashSet<u64> = if source_path.exists() {
+        let source_wad = ltk_wad::Wad::mount(File::open(source_path)?).map_err(|error| {
+            AppError::Other(format!(
+                "Failed to read source WAD {}: {}",
+                source_path.display(),
+                error
+            ))
+        })?;
+        source_wad.chunks().iter().map(|c| c.path_hash).collect()
+    } else {
+        HashSet::new()
+    };
+
+    let mut drop_hashes: HashSet<u64> = HashSet::new();
+    for chunk in &overlay_chunks {
+        if chunk.compressed_size <= MAX_MACOS_AUDIO_CHUNK_BYTES {
+            continue;
+        }
+        if source_path_hashes.contains(&chunk.path_hash) {
+            continue;
+        }
+        // Peek at the first few bytes to confirm it's audio. We only want to
+        // drop entries that the audio engine will try to ingest.
+        let raw = overlay_wad.load_chunk_raw(chunk).map_err(|error| {
+            AppError::Other(format!(
+                "Failed to read overlay chunk {:016x} from {}: {}",
+                chunk.path_hash,
+                path.display(),
+                error
+            ))
+        })?;
+        let kind = LeagueFileKind::identify_from_bytes(&raw);
+        if matches!(
+            kind,
+            LeagueFileKind::WwiseBank | LeagueFileKind::WwisePackage
+        ) {
+            drop_hashes.insert(chunk.path_hash);
+        }
+    }
+
+    if drop_hashes.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    tracing::info!(
+        "Overlay: stripping {} oversized audio entry/entries from {}",
+        drop_hashes.len(),
+        path.display()
+    );
+
+    let mut signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    let mut source = File::open(path)?;
+    source.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    source.read_exact(&mut signature)?;
+
+    let kept: Vec<&WadChunk> = overlay_chunks
+        .iter()
+        .filter(|chunk| !drop_hashes.contains(&chunk.path_hash))
+        .collect();
+
+    let temporary_path = path.with_extension("ltk-strip-tmp");
+    let result = (|| -> AppResult<()> {
+        let mut writer = BufWriter::new(File::create(&temporary_path)?);
+        let version = [b'R', b'W', 3, 4];
+        writer.write_all(&version)?;
+        writer.write_all(&signature)?;
+        writer.write_u64::<LE>(0)?;
+        writer.write_u32::<LE>(kept.len() as u32)?;
+        let toc_offset = writer.stream_position()?;
+        writer.write_all(&vec![0_u8; kept.len() * 32])?;
+
+        let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(kept.len());
+        for chunk in &kept {
+            let raw = overlay_wad.load_chunk_raw(chunk).map_err(|error| {
+                AppError::Other(format!(
+                    "Failed to read overlay chunk {:016x} from {}: {}",
+                    chunk.path_hash,
+                    path.display(),
+                    error
+                ))
+            })?;
+            let data_offset = writer.stream_position()? as usize;
+            writer.write_all(&raw)?;
+            final_chunks.push(WadChunk {
+                path_hash: chunk.path_hash,
+                data_offset,
+                compressed_size: raw.len(),
+                ..**chunk
+            });
+        }
+
+        writer.seek(SeekFrom::Start(toc_offset))?;
+        for chunk in &final_chunks {
+            chunk.write_v3_4(&mut writer).map_err(|error| {
+                AppError::Other(format!(
+                    "Failed to write chunk table for {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+        }
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&temporary_path, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result?;
+    Ok(drop_hashes)
+}
+
+/// After stripping audio chunks, find any override BIN file (PROP/PTCH) whose
+/// path references a stripped chunk's hash and revert it to the source. This
+/// stops the game from issuing dead lookups like `Failed to load Bank for
+/// Wwise (Vayne_SFX_audio.bnk)` that crash the audio engine downstream when
+/// it tries to play an event from the missing bank. Returns `true` if any
+/// override was reverted.
+///
+/// We compute `xxh64(lowercase(path), 0)` for every printable `.bnk`/`.wpk`
+/// path string inside each Zstd-compressed override and compare against the
+/// stripped set. That's the same hashing convention League uses internally
+/// for WAD path lookups.
+#[cfg(target_os = "macos")]
+fn revert_audio_referring_overrides(
+    path: &Path,
+    source_path: &Path,
+    stripped_hashes: &HashSet<u64>,
+) -> AppResult<bool> {
+    use byteorder::{WriteBytesExt as _, LE};
+    use ltk_wad::{WadChunk, WadChunkCompression};
+    use xxhash_rust::xxh64::xxh64;
+
+    if stripped_hashes.is_empty() || !source_path.exists() {
+        return Ok(false);
+    }
+
+    let mut overlay_wad = ltk_wad::Wad::mount(File::open(path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read overlay WAD {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let mut source_wad = ltk_wad::Wad::mount(File::open(source_path)?).map_err(|error| {
+        AppError::Other(format!(
+            "Failed to read source WAD {}: {}",
+            source_path.display(),
+            error
+        ))
+    })?;
+
+    let overlay_chunks = overlay_wad.chunks().clone();
+    let source_chunks = source_wad.chunks().clone();
+
+    let mut to_revert: HashMap<u64, WadChunk> = HashMap::new();
+    for chunk in &overlay_chunks {
+        let Some(source_chunk) = source_chunks.get(chunk.path_hash) else {
+            continue;
+        };
+        if source_chunk.checksum == chunk.checksum {
+            continue; // Not an override.
+        }
+        if chunk.compression_type != WadChunkCompression::Zstd {
+            continue; // BINs are always Zstd-compressed in practice.
+        }
+        let decompressed = match overlay_wad.load_chunk_decompressed(chunk) {
+            Ok(data) => data,
+            Err(_) => continue,
+        };
+        if !(decompressed.starts_with(b"PROP") || decompressed.starts_with(b"PTCH")) {
+            continue; // Only inspect property-bin chunks.
+        }
+        if bin_references_stripped_audio(&decompressed, stripped_hashes, &xxh64) {
+            to_revert.insert(chunk.path_hash, *source_chunk);
+        }
+    }
+
+    if to_revert.is_empty() {
+        return Ok(false);
+    }
+
+    tracing::info!(
+        "Overlay: reverting {} BIN override(s) referencing stripped audio in {}",
+        to_revert.len(),
+        path.display()
+    );
+
+    let mut signature = [0_u8; WAD_V3_SIGNATURE_SIZE];
+    let mut source = File::open(source_path)?;
+    source.seek(SeekFrom::Start(WAD_V3_SIGNATURE_OFFSET))?;
+    source.read_exact(&mut signature)?;
+
+    let temporary_path = path.with_extension("ltk-bin-revert-tmp");
+    let result = (|| -> AppResult<()> {
+        let mut writer = BufWriter::new(File::create(&temporary_path)?);
+        let version = [b'R', b'W', 3, 4];
+        writer.write_all(&version)?;
+        writer.write_all(&signature)?;
+        writer.write_u64::<LE>(0)?;
+        writer.write_u32::<LE>(overlay_chunks.len() as u32)?;
+        let toc_offset = writer.stream_position()?;
+        writer.write_all(&vec![0_u8; overlay_chunks.len() * 32])?;
+
+        let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(overlay_chunks.len());
+        for chunk in &overlay_chunks {
+            let final_chunk = if let Some(source_chunk) = to_revert.get(&chunk.path_hash) {
+                let raw = source_wad.load_chunk_raw(source_chunk).map_err(|error| {
+                    AppError::Other(format!(
+                        "Failed to read source chunk {:016x} from {}: {}",
+                        chunk.path_hash,
+                        source_path.display(),
+                        error
+                    ))
+                })?;
+                let data_offset = writer.stream_position()? as usize;
+                writer.write_all(&raw)?;
+                WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset,
+                    compressed_size: raw.len(),
+                    uncompressed_size: source_chunk.uncompressed_size,
+                    compression_type: source_chunk.compression_type,
+                    is_duplicated: false,
+                    frame_count: source_chunk.frame_count,
+                    start_frame: source_chunk.start_frame,
+                    checksum: source_chunk.checksum,
+                }
+            } else {
+                let raw = overlay_wad.load_chunk_raw(chunk).map_err(|error| {
+                    AppError::Other(format!(
+                        "Failed to read overlay chunk {:016x} from {}: {}",
+                        chunk.path_hash,
+                        path.display(),
+                        error
+                    ))
+                })?;
+                let data_offset = writer.stream_position()? as usize;
+                writer.write_all(&raw)?;
+                WadChunk {
+                    path_hash: chunk.path_hash,
+                    data_offset,
+                    compressed_size: raw.len(),
+                    ..*chunk
+                }
+            };
+            final_chunks.push(final_chunk);
+        }
+
+        writer.seek(SeekFrom::Start(toc_offset))?;
+        for chunk in &final_chunks {
+            chunk.write_v3_4(&mut writer).map_err(|error| {
+                AppError::Other(format!(
+                    "Failed to write chunk table for {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+        }
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&temporary_path, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result?;
+    Ok(true)
+}
+
+/// Scan a decompressed PROP/PTCH BIN for `.bnk` / `.wpk` path strings; return
+/// `true` as soon as one of them hashes to any entry in `stripped_hashes`.
+#[cfg(target_os = "macos")]
+fn bin_references_stripped_audio(
+    data: &[u8],
+    stripped_hashes: &HashSet<u64>,
+    hash_fn: &impl Fn(&[u8], u64) -> u64,
+) -> bool {
+    let mut i = 0;
+    while i + 4 <= data.len() {
+        let window = &data[i..i + 4];
+        if window == b".bnk" || window == b".wpk" {
+            // Walk backwards over the path string. Wwise paths are URL-safe
+            // ASCII: letters, digits, `/`, `.`, `_`, `-`.
+            let mut start = i;
+            while start > 0 {
+                let c = data[start - 1];
+                let is_path_char =
+                    c.is_ascii_alphanumeric() || c == b'/' || c == b'.' || c == b'_' || c == b'-';
+                if !is_path_char {
+                    break;
+                }
+                start -= 1;
+            }
+            let path = &data[start..i + 4];
+            if path.len() >= 5 {
+                let lower: Vec<u8> = path.iter().map(|c| c.to_ascii_lowercase()).collect();
+                if stripped_hashes.contains(&hash_fn(&lower, 0)) {
+                    return true;
+                }
+            }
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
 
 /// Walk the overlay WAD and detect entries whose original (source) WAD has
