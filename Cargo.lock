@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "ltk-macos-patcher"
-version = "1.9.0"
+version = "1.10.1"
 dependencies = [
  "cc",
  "libc",
